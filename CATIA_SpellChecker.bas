@@ -17,17 +17,30 @@ Public uniqueWords() As String
 Public uniqueCount As Long
 
 Public CATIA As Object
-Public objWord As Object
-Public oTempDoc As Object
-Public dictCache As Object
+
+' Set to True for development (requires references to MS Word, Scripting Runtime, and VBScript Regular Expressions 5.5)
+' Set to False for distribution
+#Const EARLY_BINDING = False
+
+#If EARLY_BINDING Then
+    Public objWord As word.Application
+    Public oTempDoc As word.Document
+    Public dictCache As Scripting.Dictionary
+#Else
+    Public objWord As Object
+    Public oTempDoc As Object
+    Public dictCache As Object
+#End If
 
 Public DICT_FOLDER As String
 Public DICT_FILE As String
+Public AUTOCORRECT_FILE As String
 
 Sub CATMain()
 
     DICT_FOLDER = Environ("USERPROFILE") & "\CATIA_SpellChecker\"
     DICT_FILE = DICT_FOLDER & "CustomDictionary.txt"
+    AUTOCORRECT_FILE = DICT_FOLDER & "AutoCorrect.txt"
 
     Err.Clear
     
@@ -56,7 +69,13 @@ Sub CATMain()
     End If
 
     On Error Resume Next
+#If EARLY_BINDING Then
+    Set objWord = New word.Application
+    Set dictCache = New Scripting.Dictionary
+#Else
     Set objWord = CreateObject("Word.Application")
+    Set dictCache = CreateObject("Scripting.Dictionary")
+#End If
     
     If Err.Number <> 0 Or objWord Is Nothing Then
         MsgBox "Failed to connect to Microsoft Word.", vbCritical, "Dependency Error"
@@ -67,8 +86,17 @@ Sub CATMain()
     
     Set oTempDoc = objWord.Documents.Add
     
-    Set dictCache = CreateObject("Scripting.Dictionary")
     dictCache.CompareMode = 1
+    
+#If EARLY_BINDING Then
+    Dim autoCorrectDict As Scripting.Dictionary
+    Set autoCorrectDict = New Scripting.Dictionary
+#Else
+    Dim autoCorrectDict As Object
+    Set autoCorrectDict = CreateObject("Scripting.Dictionary")
+#End If
+    autoCorrectDict.CompareMode = 1 ' Case-insensitive compare
+    LoadAutoCorrectDictionary AUTOCORRECT_FILE, autoCorrectDict
     
     ReDim issues(100)
     ReDim uniqueWords(100)
@@ -86,7 +114,7 @@ Sub CATMain()
     Dim objTables As Object, objTable As Object
 
     Dim s As Long, i As Long, j As Long
-    Dim tb As Long, r As Long, c As Long
+    Dim tb As Long, R As Long, C As Long
     Dim currentString As String
 
     Set objSheets = activeDoc.sheets
@@ -103,7 +131,7 @@ Sub CATMain()
                 Set objText = objTexts.Item(j)
                 currentString = objText.Text
                 If Len(Trim(currentString)) > 0 Then
-                    CollectIssues currentString, objWord, customDict, s, i, j, 0, 0, 0, False, issues, issueCount
+                    CollectIssues currentString, objWord, customDict, autoCorrectDict, s, i, j, 0, 0, 0, False, issues, issueCount
                 End If
             Next
 
@@ -111,11 +139,11 @@ Sub CATMain()
             If Not objTables Is Nothing Then
                 For tb = 1 To objTables.count
                     Set objTable = objTables.Item(tb)
-                    For r = 1 To objTable.NumberOfRows
-                        For c = 1 To objTable.NumberOfColumns
-                            currentString = objTable.GetCellString(r, c)
+                    For R = 1 To objTable.NumberOfRows
+                        For C = 1 To objTable.NumberOfColumns
+                            currentString = objTable.GetCellString(R, C)
                             If Len(Trim(currentString)) > 0 Then
-                                CollectIssues currentString, objWord, customDict, s, i, 0, tb, r, c, True, issues, issueCount
+                                CollectIssues currentString, objWord, customDict, autoCorrectDict, s, i, 0, tb, R, C, True, issues, issueCount
                             End If
                         Next
                     Next
@@ -282,15 +310,21 @@ ErrorHandler:
 End Sub
 
 Sub CollectIssues(ByVal inputStr As String, ByVal objWord As Object, ByRef customDict() As String, _
+                  ByVal autoCorrectDict As Object, _
                   ByVal sIdx As Long, ByVal vIdx As Long, ByVal tIdx As Long, ByVal tbIdx As Long, _
                   ByVal rIdx As Long, ByVal cIdx As Long, ByVal isTable As Boolean, _
                   ByRef issues() As SpellIssue, ByRef issueCount As Long)
 
+#If EARLY_BINDING Then
+    Dim regEx As RegExp, matches As MatchCollection, match As match
+    Set regEx = New RegExp
+#Else
     Dim regEx As Object, matches As Object, match As Object
     Set regEx = CreateObject("VBScript.RegExp")
+#End If
     regEx.Global = True
     regEx.IgnoreCase = True
-    regEx.Pattern = "\b[A-Za-z][A-Za-z\-']*\b"
+    regEx.Pattern = "\b[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\-']*\b"
 
     Set matches = regEx.Execute(inputStr)
 
@@ -305,6 +339,11 @@ Sub CollectIssues(ByVal inputStr As String, ByVal objWord As Object, ByRef custo
         If IsInCustomDictionary(singleWord, customDict) Then GoTo NextWord
 
         If IsEngineeringWord(singleWord) Then GoTo NextWord
+        
+        If autoCorrectDict.Exists(wordToCheck) Then
+            suggestion = autoCorrectDict(wordToCheck)
+            GoTo LogIssue
+        End If
         
         If dictCache.Exists(wordToCheck) Then
             If dictCache(wordToCheck) = "OK" Then
@@ -322,10 +361,23 @@ Sub CollectIssues(ByVal inputStr As String, ByVal objWord As Object, ByRef custo
             suggestion = GetSuggestion(wordToCheck)
             
             If suggestion = "" Or InStr(1, suggestion, Left(wordToCheck, 4), vbTextCompare) = 0 Then
-                If Right(wordToCheck, 1) = "s" And Len(wordToCheck) > 3 Then
-                    Dim singularWord As String
+                Dim singularWord As String, singularSuggestion As String
+                If Right(wordToCheck, 3) = "ies" And Len(wordToCheck) > 4 Then
+                    singularWord = Left(wordToCheck, Len(wordToCheck) - 3) & "y"
+                    singularSuggestion = GetSuggestion(singularWord)
+                    If singularSuggestion <> "" Then
+                        If Right(singularSuggestion, 1) = "y" Then
+                            suggestion = Left(singularSuggestion, Len(singularSuggestion) - 1) & "ies"
+                        Else
+                            suggestion = singularSuggestion & "s"
+                        End If
+                    End If
+                ElseIf Right(wordToCheck, 2) = "es" And Len(wordToCheck) > 4 Then
+                    singularWord = Left(wordToCheck, Len(wordToCheck) - 2)
+                    singularSuggestion = GetSuggestion(singularWord)
+                    If singularSuggestion <> "" Then suggestion = singularSuggestion & "es"
+                ElseIf Right(wordToCheck, 1) = "s" And Len(wordToCheck) > 3 Then
                     singularWord = Left(wordToCheck, Len(wordToCheck) - 1)
-                    Dim singularSuggestion As String
                     singularSuggestion = GetSuggestion(singularWord)
                     If singularSuggestion <> "" Then suggestion = singularSuggestion & "s"
                 End If
@@ -398,6 +450,35 @@ Function LoadCustomDictionary() As String()
     LoadCustomDictionary = words
 End Function
 
+Sub LoadAutoCorrectDictionary(ByVal filePath As String, ByRef dict As Object)
+    On Error Resume Next
+    If Dir(filePath) = "" Then
+        If Dir(DICT_FOLDER, vbDirectory) = "" Then MkDir DICT_FOLDER
+        Dim tempNum As Integer
+        tempNum = FreeFile
+        Open filePath For Output As #tempNum
+        Print #tempNum, "prt=PART"
+        Print #tempNum, "assy=ASSEMBLY"
+        Print #tempNum, "dwg=DRAWING"
+        Print #tempNum, "matl=MATERIAL"
+        Close #tempNum
+    End If
+
+    Dim fileNum As Integer
+    fileNum = FreeFile
+    Open filePath For Input As #fileNum
+    Dim lineText As String, parts() As String
+    Do While Not EOF(fileNum)
+        Line Input #fileNum, lineText
+        lineText = Trim(lineText)
+        If Len(lineText) > 0 And InStr(lineText, "=") > 0 Then
+            parts = Split(lineText, "=", 2)
+            dict(Trim(parts(0))) = Trim(parts(1))
+        End If
+    Loop
+    Close #fileNum
+End Sub
+
 Function IsInCustomDictionary(ByVal word As String, ByRef dict() As String) As Boolean
     Dim i As Long
     On Error Resume Next
@@ -457,10 +538,21 @@ Sub ApplyCorrection(ByVal activeDoc As Object, ByRef issue As SpellIssue, ByVal 
     Dim oldText As String
     Dim newText As String
 
+#If EARLY_BINDING Then
+    Dim regExReplace As RegExp
+    Set regExReplace = New RegExp
+#Else
+    Dim regExReplace As Object
+    Set regExReplace = CreateObject("VBScript.RegExp")
+#End If
+    regExReplace.Global = True
+    regExReplace.IgnoreCase = True
+    regExReplace.Pattern = "\b" & issue.originalWord & "\b"
+
     If issue.isTable Then
         Set objTable = objView.tables.Item(issue.tableIndex)
         oldText = objTable.GetCellString(issue.rowIndex, issue.colIndex)
-        newText = Join(Split(oldText, issue.originalWord, -1, vbTextCompare), newWord)
+        newText = regExReplace.Replace(oldText, newWord)
         objTable.SetCellString issue.rowIndex, issue.colIndex, newText
     Else
         Set objText = objView.texts.Item(issue.textIndex)
@@ -501,7 +593,7 @@ Sub ApplyCorrection(ByVal activeDoc As Object, ByRef issue As SpellIssue, ByVal 
             End If
         Next i
         
-        newText = Join(Split(oldText, issue.originalWord, -1, vbTextCompare), newWord)
+        newText = regExReplace.Replace(oldText, newWord)
         objText.Text = newText
         
         objText.SetParameterOnSubString catUnderline, 1, Len(newText), 0
@@ -529,8 +621,8 @@ End Sub
 Function GetSuggestion(ByVal word As String) As String
     Dim oRange As Object
     Dim oSuggestions As Object
-    Dim result As String
-    result = ""
+    Dim Result As String
+    Result = ""
     
     On Error Resume Next
     
@@ -540,11 +632,11 @@ Function GetSuggestion(ByVal word As String) As String
     If oTempDoc.SpellingErrors.count > 0 Then
         Set oSuggestions = oTempDoc.SpellingErrors(1).GetSpellingSuggestions
         If oSuggestions.count > 0 Then
-            result = oSuggestions(1).Name
+            Result = oSuggestions(1).Name
         End If
     End If
 
     Set oRange = Nothing
     Set oSuggestions = Nothing
-    GetSuggestion = result
+    GetSuggestion = Result
 End Function

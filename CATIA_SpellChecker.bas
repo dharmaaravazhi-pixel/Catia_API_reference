@@ -9,6 +9,9 @@ Public Type SpellIssue
     rowIndex        As Long
     colIndex        As Long
     isTable         As Boolean
+    isDimension     As Boolean
+    dimPart         As Integer
+    locationString  As String
 End Type
 
 Public issues() As SpellIssue
@@ -117,6 +120,15 @@ Sub CATMain()
     Dim tb As Long, R As Long, C As Long
     Dim currentString As String
 
+    Dim sel As Object
+    Set sel = activeDoc.Selection
+    
+    CATIA.Interactive = False
+    CATIA.RefreshDisplay = False
+    
+    Dim visProp As Object
+    Dim showState As Long ' Changed from Integer to Long to prevent Type Mismatch in GetShow
+
     Set objSheets = activeDoc.sheets
 
     For s = 1 To objSheets.count
@@ -129,28 +141,138 @@ Sub CATMain()
             Set objTexts = objView.texts
             For j = 1 To objTexts.count
                 Set objText = objTexts.Item(j)
+                
+                sel.Clear
+                sel.Add objText
+                Set visProp = sel.VisProperties
+                visProp.GetShow showState
+                If showState = 1 Then GoTo SkipText
+                
                 currentString = objText.Text
                 If Len(Trim(currentString)) > 0 Then
-                    CollectIssues currentString, objWord, customDict, autoCorrectDict, s, i, j, 0, 0, 0, False, issues, issueCount
+                    Dim locStr As String
+                    locStr = objSheet.Name & ", " & objView.Name & ", " & objText.Name
+                    CollectIssues currentString, objWord, customDict, autoCorrectDict, s, i, j, 0, 0, 0, False, False, 0, locStr, issues, issueCount
                 End If
+SkipText:
+                Set visProp = Nothing
+                Set objText = Nothing
             Next
 
             Set objTables = objView.tables
             If Not objTables Is Nothing Then
                 For tb = 1 To objTables.count
                     Set objTable = objTables.Item(tb)
+                    
+                    sel.Clear
+                    sel.Add objTable
+                    Set visProp = sel.VisProperties
+                    visProp.GetShow showState
+                    If showState = 1 Then GoTo SkipTable
+                    
                     For R = 1 To objTable.NumberOfRows
                         For C = 1 To objTable.NumberOfColumns
                             currentString = objTable.GetCellString(R, C)
                             If Len(Trim(currentString)) > 0 Then
-                                CollectIssues currentString, objWord, customDict, autoCorrectDict, s, i, 0, tb, R, C, True, issues, issueCount
+                                locStr = objSheet.Name & ", " & objView.Name & ", " & objTable.Name & " R" & CStr(R) & "C" & CStr(C)
+                                CollectIssues currentString, objWord, customDict, autoCorrectDict, s, i, 0, tb, R, C, True, False, 0, locStr, issues, issueCount
                             End If
                         Next
                     Next
+SkipTable:
+                    Set visProp = Nothing
+                    Set objTable = Nothing
                 Next
             End If
+            
+            Dim objDims As Object
+            Dim objDim As Object
+            Dim dimValue As Object
+            Dim strBefore As String, strAfter As String, strUpper As String, strLower As String
+            Dim strPrefix As String, strSuffix As String
+            Dim dimStr As String
+
+            On Error Resume Next
+            Set objDims = objView.Dimensions
+            If Not objDims Is Nothing Then
+                For j = 1 To objDims.count
+                    Set objDim = objDims.Item(j)
+                    
+                    sel.Clear
+                    sel.Add objDim
+                    Set visProp = sel.VisProperties
+                    visProp.GetShow showState
+                    If showState = 1 Then GoTo SkipDim
+                    
+                    Set dimValue = objDim.GetValue
+                    Err.Clear
+                    
+                    Dim fakeType As Integer
+                    fakeType = dimValue.FakeDimType
+                    If fakeType = 2 Then
+                        dimStr = dimValue.GetFakeDimValue()
+                        If Len(Trim(dimStr)) > 0 And Err.Number = 0 Then
+                            locStr = objSheet.Name & ", " & objView.Name & ", " & objDim.Name & " (Fake Text)"
+                            CollectIssues dimStr, objWord, customDict, autoCorrectDict, s, i, j, 0, 0, 0, False, True, 5, locStr, issues, issueCount
+                        End If
+                    End If
+                    Err.Clear
+                    
+                    strBefore = "": strAfter = "": strUpper = "": strLower = ""
+                    dimValue.GetBaultText 1, strBefore, strAfter, strUpper, strLower
+                    If Err.Number = 0 Then
+                        If Len(Trim(strBefore)) > 0 Then
+                            locStr = objSheet.Name & ", " & objView.Name & ", " & objDim.Name & " (Before)"
+                            CollectIssues strBefore, objWord, customDict, autoCorrectDict, s, i, j, 0, 0, 0, False, True, 1, locStr, issues, issueCount
+                        End If
+                        If Len(Trim(strAfter)) > 0 Then
+                            locStr = objSheet.Name & ", " & objView.Name & ", " & objDim.Name & " (After)"
+                            CollectIssues strAfter, objWord, customDict, autoCorrectDict, s, i, j, 0, 0, 0, False, True, 2, locStr, issues, issueCount
+                        End If
+                        If Len(Trim(strUpper)) > 0 Then
+                            locStr = objSheet.Name & ", " & objView.Name & ", " & objDim.Name & " (Upper)"
+                            CollectIssues strUpper, objWord, customDict, autoCorrectDict, s, i, j, 0, 0, 0, False, True, 3, locStr, issues, issueCount
+                        End If
+                        If Len(Trim(strLower)) > 0 Then
+                            locStr = objSheet.Name & ", " & objView.Name & ", " & objDim.Name & " (Lower)"
+                            CollectIssues strLower, objWord, customDict, autoCorrectDict, s, i, j, 0, 0, 0, False, True, 4, locStr, issues, issueCount
+                        End If
+                    End If
+                    Err.Clear
+                    
+                    strPrefix = "": strSuffix = ""
+                    dimValue.GetPSText 1, strPrefix, strSuffix
+                    If Err.Number = 0 Then
+                        If Len(Trim(strPrefix)) > 0 Then
+                            locStr = objSheet.Name & ", " & objView.Name & ", " & objDim.Name & " (Prefix)"
+                            CollectIssues strPrefix, objWord, customDict, autoCorrectDict, s, i, j, 0, 0, 0, False, True, 6, locStr, issues, issueCount
+                        End If
+                        If Len(Trim(strSuffix)) > 0 Then
+                            locStr = objSheet.Name & ", " & objView.Name & ", " & objDim.Name & " (Suffix)"
+                            CollectIssues strSuffix, objWord, customDict, autoCorrectDict, s, i, j, 0, 0, 0, False, True, 7, locStr, issues, issueCount
+                        End If
+                    End If
+                    Err.Clear
+                    
+SkipDim:
+                    Set dimValue = Nothing
+                    Set visProp = Nothing
+                    Set objDim = Nothing
+                Next j
+            End If
+            Set objDims = Nothing
+            On Error GoTo ErrorHandler
+            Set objTexts = Nothing
+            Set objTables = Nothing
+            Set objView = Nothing
         Next
+        Set objViews = Nothing
+        Set objSheet = Nothing
     Next
+    
+    sel.Clear
+    CATIA.Interactive = True
+    CATIA.RefreshDisplay = True
 
     If issueCount = 0 Then
         MsgBox "No spelling errors found!", vbInformation, "Spell Check Complete"
@@ -182,16 +304,31 @@ Sub CATMain()
     summaryMsg = "Found " & uniqueCount & " unique misspelled word(s)" & vbCrLf & _
                  "(" & issueCount & " total occurrence(s) across drawing)" & vbCrLf & String(40, "-") & vbCrLf
 
-    For k = 0 To uniqueCount - 1
+    ' Only show first 20 in summary to avoid MsgBox overflow
+    Dim limit As Long
+    limit = uniqueCount
+    If limit > 20 Then limit = 20
+    
+    For k = 0 To limit - 1
         Dim dispSuggestion As String
+        Dim locs As String
         dispSuggestion = ""
+        locs = ""
         Dim m As Long
         For m = 0 To issueCount - 1
             If LCase(issues(m).originalWord) = LCase(uniqueWords(k)) Then
-                dispSuggestion = issues(m).suggestion
-                Exit For
+                If dispSuggestion = "" Then dispSuggestion = issues(m).suggestion
+                If locs = "" Then
+                    locs = issues(m).locationString
+                Else
+                    locs = locs & " | " & issues(m).locationString
+                End If
             End If
         Next m
+        
+        If Len(locs) > 80 Then
+            locs = Left(locs, 75) & "..."
+        End If
 
         summaryMsg = summaryMsg & (k + 1) & ".  " & uniqueWords(k)
         If dispSuggestion <> "" Then
@@ -199,13 +336,17 @@ Sub CATMain()
         Else
             summaryMsg = summaryMsg & "   ->   (no suggestion)"
         End If
-        summaryMsg = summaryMsg & vbCrLf
+        summaryMsg = summaryMsg & "  [" & locs & "]" & vbCrLf
     Next k
+    
+    If uniqueCount > 20 Then
+        summaryMsg = summaryMsg & "... and " & (uniqueCount - 20) & " more." & vbCrLf
+    End If
 
     summaryMsg = summaryMsg & String(40, "-") & vbCrLf & vbCrLf & _
                  "Choose an action:" & vbCrLf & vbCrLf & _
-                 "[Yes]     = Accept All suggestions at once" & vbCrLf & _
-                 "[No]      = Review One by One" & vbCrLf & _
+                 "[Yes]     = Accept All suggestions automatically" & vbCrLf & _
+                 "[No]      = Review One by One (Show exact locations)" & vbCrLf & _
                  "[Cancel]  = Do nothing, exit"
 
     Dim userChoice As Integer
@@ -219,44 +360,50 @@ Sub CATMain()
     Dim correctionsMade As Long
     correctionsMade = 0
     Dim finalWord As String, userInput As String, addChoice As Integer
-
-    For k = 0 To uniqueCount - 1
-        Dim currentOriginal As String
-        Dim currentSuggestion As String
-
-        currentOriginal = uniqueWords(k)
-        currentSuggestion = ""
-        
-        For m = 0 To issueCount - 1
-            If LCase(issues(m).originalWord) = LCase(currentOriginal) Then
-                currentSuggestion = issues(m).suggestion
-                Exit For
-            End If
-        Next m
-
-        finalWord = currentOriginal
-
-        If userChoice = vbYes Then
+    
+    If userChoice = vbYes Then
+        ' Apply all unique words
+        For k = 0 To uniqueCount - 1
+            Dim currentOriginal As String
+            Dim currentSuggestion As String
+            currentOriginal = uniqueWords(k)
+            currentSuggestion = ""
+            For m = 0 To issueCount - 1
+                If LCase(issues(m).originalWord) = LCase(currentOriginal) Then
+                    currentSuggestion = issues(m).suggestion
+                    Exit For
+                End If
+            Next m
             If currentSuggestion <> "" And currentSuggestion <> "(check manually)" Then
-                finalWord = currentSuggestion
-            Else
-                GoTo NextUnique
+                Dim n As Long
+                For n = 0 To issueCount - 1
+                    If LCase(issues(n).originalWord) = LCase(currentOriginal) Then
+                        ApplyCorrection activeDoc, issues(n), currentSuggestion
+                        correctionsMade = correctionsMade + 1
+                    End If
+                Next n
             End If
-
-        ElseIf userChoice = vbNo Then
+        Next k
+    ElseIf userChoice = vbNo Then
+        ' Review individually occurrence by occurrence
+        For k = 0 To issueCount - 1
             Dim oneByOneMsg As String
-            oneByOneMsg = "Word " & (k + 1) & " of " & uniqueCount & vbCrLf & String(30, "-") & vbCrLf & "Misspelled:  " & currentOriginal & vbCrLf
-            If currentSuggestion <> "" And currentSuggestion <> "(check manually)" Then
-                oneByOneMsg = oneByOneMsg & "Suggested:   " & currentSuggestion & vbCrLf
+            oneByOneMsg = "Occurrence " & (k + 1) & " of " & issueCount & vbCrLf & String(40, "-") & vbCrLf & _
+                          "Word:        " & issues(k).originalWord & vbCrLf
+            If issues(k).suggestion <> "" And issues(k).suggestion <> "(check manually)" Then
+                oneByOneMsg = oneByOneMsg & "Suggested:   " & issues(k).suggestion & vbCrLf
             Else
-                oneByOneMsg = oneByOneMsg & "No suggestion — please type correction." & vbCrLf
+                oneByOneMsg = oneByOneMsg & "Suggested:   (no suggestion)" & vbCrLf
             End If
-            oneByOneMsg = oneByOneMsg & vbCrLf & "Type correction or leave as-is to skip:" & vbCrLf & "(Press Cancel to stop reviewing)"
-
-            If currentSuggestion <> "" And currentSuggestion <> "(check manually)" Then
-                userInput = InputBox(oneByOneMsg, "Spell Checker - One by One", currentSuggestion)
+            
+            oneByOneMsg = oneByOneMsg & "Location:    " & issues(k).locationString & vbCrLf & vbCrLf & _
+                                        "Type correction or leave as-is to skip:" & vbCrLf & _
+                                        "(Press Cancel to stop reviewing)"
+            
+            If issues(k).suggestion <> "" And issues(k).suggestion <> "(check manually)" Then
+                userInput = InputBox(oneByOneMsg, "Review One by One", issues(k).suggestion)
             Else
-                userInput = InputBox(oneByOneMsg, "Spell Checker - One by One", currentOriginal)
+                userInput = InputBox(oneByOneMsg, "Review One by One", issues(k).originalWord)
             End If
 
             If StrPtr(userInput) = 0 Then
@@ -264,29 +411,18 @@ Sub CATMain()
                 GoTo SafeExit
             End If
 
-            If userInput = "" Or userInput = currentOriginal Then
-                addChoice = MsgBox("Add """ & currentOriginal & """ to custom dictionary?" & vbCrLf & vbCrLf & "It will be ignored in all future spell check runs.", vbYesNo + vbQuestion, "Add to Dictionary?")
+            If userInput = "" Or userInput = issues(k).originalWord Then
+                addChoice = MsgBox("Add """ & issues(k).originalWord & """ to custom dictionary?" & vbCrLf & vbCrLf & "It will be ignored in all future spell check runs.", vbYesNo + vbQuestion, "Add to Dictionary?")
                 If addChoice = vbYes Then
-                    AddToCustomDictionary currentOriginal
-                    MsgBox """" & currentOriginal & """ added to dictionary.", vbInformation, "Dictionary Updated"
+                    AddToCustomDictionary issues(k).originalWord
+                    MsgBox """" & issues(k).originalWord & """ added to dictionary.", vbInformation, "Dictionary Updated"
                 End If
-                GoTo NextUnique
-            End If
-            finalWord = userInput
-        End If
-
-        If finalWord = currentOriginal Then GoTo NextUnique
-
-        Dim n As Long
-        For n = 0 To issueCount - 1
-            If LCase(issues(n).originalWord) = LCase(currentOriginal) Then
-                ApplyCorrection activeDoc, issues(n), finalWord
+            Else
+                ApplyCorrection activeDoc, issues(k), userInput
                 correctionsMade = correctionsMade + 1
             End If
-        Next n
-
-NextUnique:
-    Next k
+        Next k
+    End If
 
     MsgBox "Spell check complete!" & vbCrLf & correctionsMade & " occurrence(s) corrected.", vbInformation, "Done"
 
@@ -301,7 +437,10 @@ SafeExit:
         Set objWord = Nothing
     End If
     Set dictCache = Nothing
-    CATIA.RefreshDisplay = True
+    If Not CATIA Is Nothing Then
+        CATIA.Interactive = True
+        CATIA.RefreshDisplay = True
+    End If
     Exit Sub
 
 ErrorHandler:
@@ -312,7 +451,7 @@ End Sub
 Sub CollectIssues(ByVal inputStr As String, ByVal objWord As Object, ByRef customDict() As String, _
                   ByVal autoCorrectDict As Object, _
                   ByVal sIdx As Long, ByVal vIdx As Long, ByVal tIdx As Long, ByVal tbIdx As Long, _
-                  ByVal rIdx As Long, ByVal cIdx As Long, ByVal isTable As Boolean, _
+                  ByVal rIdx As Long, ByVal cIdx As Long, ByVal isTable As Boolean, ByVal isDim As Boolean, ByVal dimPrt As Integer, ByVal locStr As String, _
                   ByRef issues() As SpellIssue, ByRef issueCount As Long)
 
 #If EARLY_BINDING Then
@@ -403,6 +542,9 @@ LogIssue:
         issues(issueCount).rowIndex = rIdx
         issues(issueCount).colIndex = cIdx
         issues(issueCount).isTable = isTable
+        issues(issueCount).isDimension = isDim
+        issues(issueCount).dimPart = dimPrt
+        issues(issueCount).locationString = locStr
         issueCount = issueCount + 1
 
 NextWord:
@@ -531,7 +673,7 @@ End Function
 Sub ApplyCorrection(ByVal activeDoc As Object, ByRef issue As SpellIssue, ByVal newWord As String)
     On Error Resume Next
 
-    Dim objSheet, objView, objText, objTable
+    Dim objSheet, objView, objText, objTable, objDim, dimValue
     Set objSheet = activeDoc.sheets.Item(issue.sheetIndex)
     Set objView = objSheet.views.Item(issue.viewIndex)
 
@@ -545,11 +687,49 @@ Sub ApplyCorrection(ByVal activeDoc As Object, ByRef issue As SpellIssue, ByVal 
     Dim regExReplace As Object
     Set regExReplace = CreateObject("VBScript.RegExp")
 #End If
-    regExReplace.Global = True
+    regExReplace.Global = False ' Only replace the first match since we review occurrence by occurrence
     regExReplace.IgnoreCase = True
     regExReplace.Pattern = "\b" & issue.originalWord & "\b"
 
-    If issue.isTable Then
+    If issue.isDimension Then
+        Set objDim = objView.Dimensions.Item(issue.textIndex)
+        Set dimValue = objDim.GetValue
+        If issue.dimPart = 5 Then
+            oldText = dimValue.GetFakeDimValue()
+            newText = regExReplace.Replace(oldText, newWord)
+            dimValue.SetFakeDimValue newText
+        ElseIf issue.dimPart >= 1 And issue.dimPart <= 4 Then
+            Dim sBef As String, sAft As String, sUp As String, sLow As String
+            dimValue.GetBaultText 1, sBef, sAft, sUp, sLow
+            If issue.dimPart = 1 Then
+                newText = regExReplace.Replace(sBef, newWord)
+                sBef = newText
+            ElseIf issue.dimPart = 2 Then
+                newText = regExReplace.Replace(sAft, newWord)
+                sAft = newText
+            ElseIf issue.dimPart = 3 Then
+                newText = regExReplace.Replace(sUp, newWord)
+                sUp = newText
+            ElseIf issue.dimPart = 4 Then
+                newText = regExReplace.Replace(sLow, newWord)
+                sLow = newText
+            End If
+            dimValue.SetBaultText 1, sBef, sAft, sUp, sLow
+        ElseIf issue.dimPart = 6 Or issue.dimPart = 7 Then
+            Dim sPre As String, sSuf As String
+            dimValue.GetPSText 1, sPre, sSuf
+            If issue.dimPart = 6 Then
+                newText = regExReplace.Replace(sPre, newWord)
+                sPre = newText
+            ElseIf issue.dimPart = 7 Then
+                newText = regExReplace.Replace(sSuf, newWord)
+                sSuf = newText
+            End If
+            dimValue.SetPSText 1, sPre, sSuf
+        End If
+        Set dimValue = Nothing
+        Set objDim = Nothing
+    ElseIf issue.isTable Then
         Set objTable = objView.tables.Item(issue.tableIndex)
         oldText = objTable.GetCellString(issue.rowIndex, issue.colIndex)
         newText = regExReplace.Replace(oldText, newWord)
@@ -616,6 +796,12 @@ Sub ApplyCorrection(ByVal activeDoc As Object, ByRef issue As SpellIssue, ByVal 
             End If
         Next i
     End If
+    
+    Set regExReplace = Nothing
+    Set objText = Nothing
+    Set objTable = Nothing
+    Set objView = Nothing
+    Set objSheet = Nothing
 End Sub
 
 Function GetSuggestion(ByVal word As String) As String

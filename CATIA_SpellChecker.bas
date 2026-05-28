@@ -29,10 +29,14 @@ Public CATIA As Object
     Public objWord As word.Application
     Public oTempDoc As word.Document
     Public dictCache As Scripting.Dictionary
+    Public globalRegExExt As RegExp
+    Public globalRegExRep As RegExp
 #Else
     Public objWord As Object
     Public oTempDoc As Object
     Public dictCache As Object
+    Public globalRegExExt As Object
+    Public globalRegExRep As Object
 #End If
 
 Public DICT_FOLDER As String
@@ -75,9 +79,13 @@ Sub CATMain()
 #If EARLY_BINDING Then
     Set objWord = New word.Application
     Set dictCache = New Scripting.Dictionary
+    Set globalRegExExt = New RegExp
+    Set globalRegExRep = New RegExp
 #Else
     Set objWord = CreateObject("Word.Application")
     Set dictCache = CreateObject("Scripting.Dictionary")
+    Set globalRegExExt = CreateObject("VBScript.RegExp")
+    Set globalRegExRep = CreateObject("VBScript.RegExp")
 #End If
     
     If Err.Number <> 0 Or objWord Is Nothing Then
@@ -90,6 +98,13 @@ Sub CATMain()
     Set oTempDoc = objWord.Documents.Add
     
     dictCache.CompareMode = 1
+    
+    globalRegExExt.Global = True
+    globalRegExExt.IgnoreCase = True
+    globalRegExExt.Pattern = "\b[A-Za-zÀ-ÿØ][A-Za-zÀ-ÿØ0-9\-\']*\b"
+
+    globalRegExRep.Global = False
+    globalRegExRep.IgnoreCase = True
     
 #If EARLY_BINDING Then
     Dim autoCorrectDict As Scripting.Dictionary
@@ -128,6 +143,7 @@ Sub CATMain()
     
     Dim visProp As Object
     Dim showState As Long ' Changed from Integer to Long to prevent Type Mismatch in GetShow
+    Dim startCount As Long
 
     Set objSheets = activeDoc.sheets
 
@@ -142,20 +158,25 @@ Sub CATMain()
             For j = 1 To objTexts.count
                 Set objText = objTexts.Item(j)
                 
-                sel.Clear
-                sel.Add objText
-                Set visProp = sel.VisProperties
-                visProp.GetShow showState
-                If showState = 1 Then GoTo SkipText
-                
                 currentString = objText.Text
                 If Len(Trim(currentString)) > 0 Then
                     Dim locStr As String
                     locStr = objSheet.Name & ", " & objView.Name & ", " & objText.Name
+                    
+                    startCount = issueCount
                     CollectIssues currentString, objWord, customDict, autoCorrectDict, s, i, j, 0, 0, 0, False, False, 0, locStr, issues, issueCount
+                    
+                    If issueCount > startCount Then
+                        sel.Clear
+                        sel.Add objText
+                        Set visProp = sel.VisProperties
+                        visProp.GetShow showState
+                        If showState = 1 Then
+                            issueCount = startCount
+                        End If
+                        Set visProp = Nothing
+                    End If
                 End If
-SkipText:
-                Set visProp = Nothing
                 Set objText = Nothing
             Next
 
@@ -164,11 +185,7 @@ SkipText:
                 For tb = 1 To objTables.count
                     Set objTable = objTables.Item(tb)
                     
-                    sel.Clear
-                    sel.Add objTable
-                    Set visProp = sel.VisProperties
-                    visProp.GetShow showState
-                    If showState = 1 Then GoTo SkipTable
+                    startCount = issueCount
                     
                     For R = 1 To objTable.NumberOfRows
                         For C = 1 To objTable.NumberOfColumns
@@ -179,8 +196,18 @@ SkipText:
                             End If
                         Next
                     Next
-SkipTable:
-                    Set visProp = Nothing
+                    
+                    If issueCount > startCount Then
+                        sel.Clear
+                        sel.Add objTable
+                        Set visProp = sel.VisProperties
+                        visProp.GetShow showState
+                        If showState = 1 Then
+                            issueCount = startCount
+                        End If
+                        Set visProp = Nothing
+                    End If
+                    
                     Set objTable = Nothing
                 Next
             End If
@@ -198,11 +225,7 @@ SkipTable:
                 For j = 1 To objDims.count
                     Set objDim = objDims.Item(j)
                     
-                    sel.Clear
-                    sel.Add objDim
-                    Set visProp = sel.VisProperties
-                    visProp.GetShow showState
-                    If showState = 1 Then GoTo SkipDim
+                    startCount = issueCount
                     
                     Set dimValue = objDim.GetValue
                     Err.Clear
@@ -254,9 +277,18 @@ SkipTable:
                     End If
                     Err.Clear
                     
-SkipDim:
+                    If issueCount > startCount Then
+                        sel.Clear
+                        sel.Add objDim
+                        Set visProp = sel.VisProperties
+                        visProp.GetShow showState
+                        If showState = 1 Then
+                            issueCount = startCount
+                        End If
+                        Set visProp = Nothing
+                    End If
+                    
                     Set dimValue = Nothing
-                    Set visProp = Nothing
                     Set objDim = Nothing
                 Next j
             End If
@@ -455,99 +487,89 @@ Sub CollectIssues(ByVal inputStr As String, ByVal objWord As Object, ByRef custo
                   ByRef issues() As SpellIssue, ByRef issueCount As Long)
 
 #If EARLY_BINDING Then
-    Dim regEx As RegExp, matches As MatchCollection, match As match
-    Set regEx = New RegExp
+    Dim matches As MatchCollection, match As match
 #Else
-    Dim regEx As Object, matches As Object, match As Object
-    Set regEx = CreateObject("VBScript.RegExp")
+    Dim matches As Object, match As Object
 #End If
-    regEx.Global = True
-    regEx.IgnoreCase = True
-    regEx.Pattern = "\b[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\-']*\b"
 
-    Set matches = regEx.Execute(inputStr)
+    Set matches = globalRegExExt.Execute(inputStr)
 
     Dim singleWord As String
     Dim wordToCheck As String
     Dim suggestion As String
+    Dim logThisIssue As Boolean
 
     For Each match In matches
         singleWord = match.Value
         wordToCheck = LCase(singleWord)
+        logThisIssue = False
+        suggestion = ""
 
-        If IsInCustomDictionary(singleWord, customDict) Then GoTo NextWord
-
-        If IsEngineeringWord(singleWord) Then GoTo NextWord
-        
-        If autoCorrectDict.Exists(wordToCheck) Then
-            suggestion = autoCorrectDict(wordToCheck)
-            GoTo LogIssue
-        End If
-        
-        If dictCache.Exists(wordToCheck) Then
-            If dictCache(wordToCheck) = "OK" Then
-                GoTo NextWord
+        If Not IsInCustomDictionary(singleWord, customDict) And Not IsEngineeringWord(singleWord) Then
+            If autoCorrectDict.Exists(wordToCheck) Then
+                suggestion = autoCorrectDict(wordToCheck)
+                logThisIssue = True
+            ElseIf dictCache.Exists(wordToCheck) Then
+                If dictCache(wordToCheck) <> "OK" Then
+                    suggestion = dictCache(wordToCheck)
+                    logThisIssue = True
+                End If
             Else
-                suggestion = dictCache(wordToCheck)
-                GoTo LogIssue
-            End If
-        End If
-
-        If objWord.CheckSpelling(wordToCheck) Then
-            dictCache.Add wordToCheck, "OK"
-            GoTo NextWord
-        Else
-            suggestion = GetSuggestion(wordToCheck)
-            
-            If suggestion = "" Or InStr(1, suggestion, Left(wordToCheck, 4), vbTextCompare) = 0 Then
-                Dim singularWord As String, singularSuggestion As String
-                If Right(wordToCheck, 3) = "ies" And Len(wordToCheck) > 4 Then
-                    singularWord = Left(wordToCheck, Len(wordToCheck) - 3) & "y"
-                    singularSuggestion = GetSuggestion(singularWord)
-                    If singularSuggestion <> "" Then
-                        If Right(singularSuggestion, 1) = "y" Then
-                            suggestion = Left(singularSuggestion, Len(singularSuggestion) - 1) & "ies"
-                        Else
-                            suggestion = singularSuggestion & "s"
+                If objWord.CheckSpelling(wordToCheck) Then
+                    dictCache.Add wordToCheck, "OK"
+                Else
+                    suggestion = GetSuggestion(wordToCheck)
+                    
+                    If suggestion = "" Or InStr(1, suggestion, Left(wordToCheck, 4), vbTextCompare) = 0 Then
+                        Dim singularWord As String, singularSuggestion As String
+                        If Right(wordToCheck, 3) = "ies" And Len(wordToCheck) > 4 Then
+                            singularWord = Left(wordToCheck, Len(wordToCheck) - 3) & "y"
+                            singularSuggestion = GetSuggestion(singularWord)
+                            If singularSuggestion <> "" Then
+                                If Right(singularSuggestion, 1) = "y" Then
+                                    suggestion = Left(singularSuggestion, Len(singularSuggestion) - 1) & "ies"
+                                Else
+                                    suggestion = singularSuggestion & "s"
+                                End If
+                            End If
+                        ElseIf Right(wordToCheck, 2) = "es" And Len(wordToCheck) > 4 Then
+                            singularWord = Left(wordToCheck, Len(wordToCheck) - 2)
+                            singularSuggestion = GetSuggestion(singularWord)
+                            If singularSuggestion <> "" Then suggestion = singularSuggestion & "es"
+                        ElseIf Right(wordToCheck, 1) = "s" And Len(wordToCheck) > 3 Then
+                            singularWord = Left(wordToCheck, Len(wordToCheck) - 1)
+                            singularSuggestion = GetSuggestion(singularWord)
+                            If singularSuggestion <> "" Then suggestion = singularSuggestion & "s"
                         End If
                     End If
-                ElseIf Right(wordToCheck, 2) = "es" And Len(wordToCheck) > 4 Then
-                    singularWord = Left(wordToCheck, Len(wordToCheck) - 2)
-                    singularSuggestion = GetSuggestion(singularWord)
-                    If singularSuggestion <> "" Then suggestion = singularSuggestion & "es"
-                ElseIf Right(wordToCheck, 1) = "s" And Len(wordToCheck) > 3 Then
-                    singularWord = Left(wordToCheck, Len(wordToCheck) - 1)
-                    singularSuggestion = GetSuggestion(singularWord)
-                    If singularSuggestion <> "" Then suggestion = singularSuggestion & "s"
+        
+                    If suggestion <> "" Then suggestion = UCase(suggestion)
+                    dictCache.Add wordToCheck, IIf(suggestion <> "", suggestion, "(check manually)")
+                    logThisIssue = True
                 End If
             End If
-
-            If suggestion <> "" Then suggestion = UCase(suggestion)
-            
-            dictCache.Add wordToCheck, IIf(suggestion <> "", suggestion, "(check manually)")
         End If
 
-LogIssue:
-        If issueCount > UBound(issues) Then
-            ReDim Preserve issues(UBound(issues) + 100)
+        If logThisIssue Then
+            If issueCount > UBound(issues) Then
+                ReDim Preserve issues(UBound(issues) + 100)
+            End If
+    
+            issues(issueCount).originalWord = singleWord
+            issues(issueCount).suggestion = suggestion
+            issues(issueCount).contextText = inputStr
+            issues(issueCount).sheetIndex = sIdx
+            issues(issueCount).viewIndex = vIdx
+            issues(issueCount).textIndex = tIdx
+            issues(issueCount).tableIndex = tbIdx
+            issues(issueCount).rowIndex = rIdx
+            issues(issueCount).colIndex = cIdx
+            issues(issueCount).isTable = isTable
+            issues(issueCount).isDimension = isDim
+            issues(issueCount).dimPart = dimPrt
+            issues(issueCount).locationString = locStr
+            issueCount = issueCount + 1
         End If
-
-        issues(issueCount).originalWord = singleWord
-        issues(issueCount).suggestion = suggestion
-        issues(issueCount).contextText = inputStr
-        issues(issueCount).sheetIndex = sIdx
-        issues(issueCount).viewIndex = vIdx
-        issues(issueCount).textIndex = tIdx
-        issues(issueCount).tableIndex = tbIdx
-        issues(issueCount).rowIndex = rIdx
-        issues(issueCount).colIndex = cIdx
-        issues(issueCount).isTable = isTable
-        issues(issueCount).isDimension = isDim
-        issues(issueCount).dimPart = dimPrt
-        issues(issueCount).locationString = locStr
-        issueCount = issueCount + 1
-
-NextWord:
     Next match
 End Sub
 
@@ -649,25 +671,56 @@ Function IsEngineeringWord(ByVal word As String) As Boolean
     Dim w As String
     w = UCase(Trim(word))
     
+    ' Check for single letter hyphenation (e.g., A-A)
+    If Len(w) = 3 And Mid(w, 2, 1) = "-" Then
+        If Left(w, 1) >= "A" And Left(w, 1) <= "Z" And Right(w, 1) >= "A" And Right(w, 1) <= "Z" Then
+            IsEngineeringWord = True
+            Exit Function
+        End If
+    End If
+    
     Dim ch As String
     Dim hasLetter As Boolean
     Dim hasDigit As Boolean
+    Dim hasSpecialEngChar As Boolean
     Dim ci As Integer
     hasLetter = False
     hasDigit = False
+    hasSpecialEngChar = False
 
     For ci = 1 To Len(w)
         ch = Mid(w, ci, 1)
         If ch >= "A" And ch <= "Z" Then hasLetter = True
         If ch >= "0" And ch <= "9" Then hasDigit = True
+        If ch = "Ø" Or ch = "°" Then hasSpecialEngChar = True
     Next ci
 
-    If hasLetter And hasDigit Then
+    If (hasLetter And hasDigit) Or hasSpecialEngChar Then
         IsEngineeringWord = True
         Exit Function
     End If
 
     IsEngineeringWord = False
+End Function
+
+Function EscapeRegex(ByVal str As String) As String
+    Dim res As String
+    res = str
+    res = Replace(res, "\", "\\")
+    res = Replace(res, "^", "\^")
+    res = Replace(res, "$", "\$")
+    res = Replace(res, "*", "\*")
+    res = Replace(res, "+", "\+")
+    res = Replace(res, "?", "\?")
+    res = Replace(res, ".", "\.")
+    res = Replace(res, "(", "\(")
+    res = Replace(res, ")", "\)")
+    res = Replace(res, "|", "\|")
+    res = Replace(res, "{", "\{")
+    res = Replace(res, "}", "\}")
+    res = Replace(res, "[", "\[")
+    res = Replace(res, "]", "\]")
+    EscapeRegex = res
 End Function
 
 Sub ApplyCorrection(ByVal activeDoc As Object, ByRef issue As SpellIssue, ByVal newWord As String)
@@ -679,39 +732,29 @@ Sub ApplyCorrection(ByVal activeDoc As Object, ByRef issue As SpellIssue, ByVal 
 
     Dim oldText As String
     Dim newText As String
-
-#If EARLY_BINDING Then
-    Dim regExReplace As RegExp
-    Set regExReplace = New RegExp
-#Else
-    Dim regExReplace As Object
-    Set regExReplace = CreateObject("VBScript.RegExp")
-#End If
-    regExReplace.Global = False ' Only replace the first match since we review occurrence by occurrence
-    regExReplace.IgnoreCase = True
-    regExReplace.Pattern = "\b" & issue.originalWord & "\b"
+    globalRegExRep.Pattern = "\b" & EscapeRegex(issue.originalWord) & "\b"
 
     If issue.isDimension Then
         Set objDim = objView.Dimensions.Item(issue.textIndex)
         Set dimValue = objDim.GetValue
         If issue.dimPart = 5 Then
             oldText = dimValue.GetFakeDimValue()
-            newText = regExReplace.Replace(oldText, newWord)
+            newText = globalRegExRep.Replace(oldText, newWord)
             dimValue.SetFakeDimValue newText
         ElseIf issue.dimPart >= 1 And issue.dimPart <= 4 Then
             Dim sBef As String, sAft As String, sUp As String, sLow As String
             dimValue.GetBaultText 1, sBef, sAft, sUp, sLow
             If issue.dimPart = 1 Then
-                newText = regExReplace.Replace(sBef, newWord)
+                newText = globalRegExRep.Replace(sBef, newWord)
                 sBef = newText
             ElseIf issue.dimPart = 2 Then
-                newText = regExReplace.Replace(sAft, newWord)
+                newText = globalRegExRep.Replace(sAft, newWord)
                 sAft = newText
             ElseIf issue.dimPart = 3 Then
-                newText = regExReplace.Replace(sUp, newWord)
+                newText = globalRegExRep.Replace(sUp, newWord)
                 sUp = newText
             ElseIf issue.dimPart = 4 Then
-                newText = regExReplace.Replace(sLow, newWord)
+                newText = globalRegExRep.Replace(sLow, newWord)
                 sLow = newText
             End If
             dimValue.SetBaultText 1, sBef, sAft, sUp, sLow
@@ -719,10 +762,10 @@ Sub ApplyCorrection(ByVal activeDoc As Object, ByRef issue As SpellIssue, ByVal 
             Dim sPre As String, sSuf As String
             dimValue.GetPSText 1, sPre, sSuf
             If issue.dimPart = 6 Then
-                newText = regExReplace.Replace(sPre, newWord)
+                newText = globalRegExRep.Replace(sPre, newWord)
                 sPre = newText
             ElseIf issue.dimPart = 7 Then
-                newText = regExReplace.Replace(sSuf, newWord)
+                newText = globalRegExRep.Replace(sSuf, newWord)
                 sSuf = newText
             End If
             dimValue.SetPSText 1, sPre, sSuf
@@ -732,7 +775,7 @@ Sub ApplyCorrection(ByVal activeDoc As Object, ByRef issue As SpellIssue, ByVal 
     ElseIf issue.isTable Then
         Set objTable = objView.tables.Item(issue.tableIndex)
         oldText = objTable.GetCellString(issue.rowIndex, issue.colIndex)
-        newText = regExReplace.Replace(oldText, newWord)
+        newText = globalRegExRep.Replace(oldText, newWord)
         objTable.SetCellString issue.rowIndex, issue.colIndex, newText
     Else
         Set objText = objView.texts.Item(issue.textIndex)
@@ -773,7 +816,7 @@ Sub ApplyCorrection(ByVal activeDoc As Object, ByRef issue As SpellIssue, ByVal 
             End If
         Next i
         
-        newText = regExReplace.Replace(oldText, newWord)
+        newText = globalRegExRep.Replace(oldText, newWord)
         objText.Text = newText
         
         objText.SetParameterOnSubString catUnderline, 1, Len(newText), 0
@@ -797,7 +840,6 @@ Sub ApplyCorrection(ByVal activeDoc As Object, ByRef issue As SpellIssue, ByVal 
         Next i
     End If
     
-    Set regExReplace = Nothing
     Set objText = Nothing
     Set objTable = Nothing
     Set objView = Nothing

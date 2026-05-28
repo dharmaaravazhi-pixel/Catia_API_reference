@@ -1,0 +1,301 @@
+Option Explicit
+
+Sub CATMain()
+
+    On Error GoTo EH
+    
+    Dim myCatia As Object
+    Set myCatia = GetObject(, "CATIA.Application")
+    
+    Dim oDoc As DrawingDocument
+    Dim oSel As Selection
+    Dim oTable As DrawingTable
+
+    Dim xlApp As Object
+    Dim wb As Object
+    Dim ws As Object
+    Dim xlCol As Object
+
+    Dim arr As Variant
+
+    Dim rows As Long
+    Dim cols As Long
+    Dim R As Long
+    Dim C As Long
+
+    Dim testExcel As String
+    Dim newRows As Long
+    Dim newCols As Long
+    Dim xlCell As Object
+    Dim catText As Object
+    Dim cellVal As Variant
+    Dim rowSpan As Long
+    Dim colSpan As Long
+    
+    Dim editMode As Integer
+    Dim userResp As String
+    Dim InputObjectType(0)
+
+    Set oDoc = myCatia.ActiveDocument
+    Set oSel = oDoc.Selection
+
+    ' Determine Mode
+    editMode = -1
+    If oSel.count > 0 Then
+        If TypeName(oSel.Item(1).Value) = "DrawingTable" Then
+            editMode = 1
+            Set oTable = oSel.Item(1).Value
+        End If
+    End If
+
+    If editMode = -1 Then
+        userResp = InputBox("Select Mode:" & vbCrLf & _
+                            "0 - Create new table" & vbCrLf & _
+                            "1 - Edit existing table", "Table Editor Mode", "1")
+                            
+        If userResp = "" Then Exit Sub
+        editMode = CInt(userResp)
+        
+        If editMode = 1 Then
+            InputObjectType(0) = "DrawingTable"
+            oSel.Clear
+            Dim Status As String
+            Dim oSelLB As Object
+            Set oSelLB = oSel
+            Status = oSelLB.SelectElement2(InputObjectType, "Select a table to edit, or press Esc to cancel", False)
+            If Status <> "Normal" Then Exit Sub
+            Set oTable = oSel.Item(1).Value
+        ElseIf editMode = 0 Then
+            Set oTable = Nothing
+        Else
+            MsgBox "Invalid mode.", vbExclamation
+            Exit Sub
+        End If
+    End If
+
+    ' Setup Excel
+    Set xlApp = CreateObject("Excel.Application")
+    xlApp.Visible = True
+    xlApp.DisplayFormulaBar = False
+    xlApp.DisplayStatusBar = False
+    xlApp.ExecuteExcel4Macro "SHOW.TOOLBAR(""Ribbon"",False)"
+    
+    Set wb = xlApp.Workbooks.Add
+    Set ws = wb.Sheets(1)
+    
+    With xlApp.ActiveWindow
+        .WindowState = -4140
+    End With
+    xlApp.Left = 350
+    xlApp.Top = 120
+    xlApp.Width = 850
+    xlApp.Height = 550
+
+    If editMode = 1 Then
+        ' Extract existing table data
+        rows = oTable.NumberOfRows
+        cols = oTable.NumberOfColumns
+        ReDim arr(1 To rows, 1 To cols)
+        
+        For R = 1 To rows
+            For C = 1 To cols
+                arr(R, C) = oTable.GetCellString(R, C)
+            Next C
+        Next R
+        
+        ws.Range(ws.cells(1, 1), ws.cells(rows, cols)).Value = arr
+        ws.Columns.AutoFit
+    End If
+
+    For Each xlCol In ws.UsedRange.Columns
+        If xlCol.ColumnWidth < 8 Then xlCol.ColumnWidth = 8
+    Next
+
+    AppActivate xlApp.Caption
+
+    MsgBox "Edit table in Excel." & vbCrLf & _
+           "Click OK to update CATIA.", _
+           vbInformation
+
+    On Error Resume Next
+    testExcel = xlApp.Name
+
+    If Err.Number <> 0 Then
+        MsgBox "Excel was closed." & vbCrLf & _
+               "Table update cancelled.", _
+               vbExclamation
+        Exit Sub
+    End If
+
+    Err.Clear
+    On Error GoTo EH
+
+    myCatia.RefreshDisplay = False
+
+    ' 1. Calculate new bounds based on Excel UsedRange
+    newRows = ws.UsedRange.rows.count + ws.UsedRange.Row - 1
+    newCols = ws.UsedRange.Columns.count + ws.UsedRange.Column - 1
+    
+    If newRows < 1 Then newRows = 1
+    If newCols < 1 Then newCols = 1
+
+    If editMode = 0 Then
+        ' Create new table in CATIA
+        Dim oDrwTables As DrawingTables
+        Set oDrwTables = oDoc.Sheets.ActiveSheet.Views.ActiveView.Tables
+        ' Creates table at X=100, Y=100 with default cell size 10x30
+        Set oTable = oDrwTables.Add(100, 100, newRows, newCols, 10, 30)
+    End If
+
+    oTable.ComputeMode = CatTableComputeOFF
+
+    ' 2. Adjust CATIA Table Dimensions dynamically
+    Do While oTable.NumberOfRows < newRows
+        oTable.AddRow 0
+    Loop
+    Do While oTable.NumberOfRows > newRows
+        oTable.RemoveRow oTable.NumberOfRows
+    Loop
+    
+    Do While oTable.NumberOfColumns < newCols
+        oTable.AddColumn 0
+    Loop
+    Do While oTable.NumberOfColumns > newCols
+        oTable.RemoveColumn oTable.NumberOfColumns
+    Loop
+
+    ' 3. Sync Data, Formatting, and Merges
+    For R = 1 To newRows
+        For C = 1 To newCols
+            Set xlCell = ws.cells(R, C)
+            cellVal = xlCell.Value
+            
+            ' Sync text string
+            If IsEmpty(cellVal) Then
+                oTable.SetCellString R, C, ""
+            Else
+                oTable.SetCellString R, C, CStr(cellVal)
+            End If
+            
+            ' Sync Formatting (Bold and Alignment)
+            On Error Resume Next
+            Set catText = oTable.GetCellObject(R, C)
+            On Error GoTo EH
+            
+            If Not catText Is Nothing Then
+                If xlCell.Font.Bold = True Then
+                    catText.TextProperties.Bold = 1
+                Else
+                    catText.TextProperties.Bold = 0
+                End If
+                
+                Select Case xlCell.HorizontalAlignment
+                    Case -4131 ' xlHAlignLeft
+                        oTable.SetCellAlignment R, C, 0
+                    Case -4108 ' xlHAlignCenter
+                        oTable.SetCellAlignment R, C, 1
+                    Case -4152 ' xlHAlignRight
+                        oTable.SetCellAlignment R, C, 2
+                End Select
+            End If
+            
+            ' Sync Merged Cells
+            If xlCell.MergeCells Then
+                If xlCell.Address = xlCell.MergeArea.cells(1, 1).Address Then
+                    rowSpan = xlCell.MergeArea.rows.count
+                    colSpan = xlCell.MergeArea.Columns.count
+                    On Error Resume Next
+                    oTable.MergeCells R, C, rowSpan, colSpan
+                    On Error GoTo EH
+                End If
+            End If
+            
+        Next C
+    Next R
+
+    oTable.ComputeMode = CatTableComputeON
+
+    AutoResizeTable oTable
+
+    myCatia.RefreshDisplay = True
+
+    oDoc.Update
+
+    On Error Resume Next
+    xlApp.ExecuteExcel4Macro "SHOW.TOOLBAR(""Ribbon"",True)"
+    xlApp.DisplayFormulaBar = True
+    xlApp.DisplayStatusBar = True
+
+    If Not wb Is Nothing Then
+        wb.Saved = True
+        wb.Close
+    End If
+
+    If Not xlApp Is Nothing Then
+        xlApp.Quit
+    End If
+
+    Set ws = Nothing
+    Set wb = Nothing
+    Set xlApp = Nothing
+
+    Err.Clear
+    On Error GoTo 0
+
+    MsgBox "Table updated successfully.", _
+           vbInformation
+
+    Exit Sub
+
+EH:
+    Dim errMsg As String
+    errMsg = Err.Description
+    
+    Resume Cleanup
+    
+Cleanup:
+    On Error Resume Next
+
+    myCatia.RefreshDisplay = True
+
+    If Not oTable Is Nothing Then
+        oTable.ComputeMode = CatTableComputeON
+    End If
+
+    If Not xlApp Is Nothing Then
+        xlApp.Quit
+    End If
+
+    Set ws = Nothing
+    Set wb = Nothing
+    Set xlApp = Nothing
+
+    MsgBox "Error : " & errMsg, _
+           vbCritical
+
+End Sub
+
+Private Sub AutoResizeTable(oTable As DrawingTable)
+
+    Dim R As Long
+    Dim C As Long
+    Dim txt As String
+    Dim maxLen As Long
+    Dim colWidth As Double
+
+    For C = 1 To oTable.NumberOfColumns
+        maxLen = 5
+        For R = 1 To oTable.NumberOfRows
+            txt = oTable.GetCellString(R, C)
+            If Len(txt) > maxLen Then
+                maxLen = Len(txt)
+            End If
+        Next R
+
+        colWidth = maxLen * 3
+        If colWidth < 8 Then colWidth = 8
+        If colWidth > 80 Then colWidth = 80
+        oTable.SetColumnSize C, colWidth
+    Next C
+
+End Sub

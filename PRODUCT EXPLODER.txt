@@ -17,9 +17,14 @@ Sub CATMain()
     End If
     On Error GoTo 0
 
+    If Not IsProductDocumentReady(activeDoc) Then
+        MsgBox "Active document is not a valid Product document.", vbCritical, "Error"
+        Exit Sub
+    End If
+
     Dim sel As Object
     Set sel = activeDoc.Selection
-    If sel.count = 0 Then
+    If sel.Count = 0 Then
         MsgBox "Select products first!"
         Exit Sub
     End If
@@ -32,7 +37,7 @@ Sub CATMain()
     ReDim prods(1 To 1)
     selectedCount = 0
 
-    If sel.count = 1 And sel.Item(1).Value.Name = activeDoc.Product.Name Then
+    If sel.Count = 1 And sel.Item(1).Value.Name = activeDoc.Product.Name Then
         Dim child As Object
         For Each child In sel.Item(1).Value.Products
             selectedCount = selectedCount + 1
@@ -40,7 +45,7 @@ Sub CATMain()
             Set prods(selectedCount) = child
         Next
     Else
-        For i = 1 To sel.count
+        For i = 1 To sel.Count
             selectedCount = selectedCount + 1
             ReDim Preserve prods(1 To selectedCount)
             Set prods(selectedCount) = sel.Item(i).Value
@@ -153,7 +158,13 @@ Sub CATMain()
     Dim maxMain() As Double: ReDim maxMain(1 To totalParts)
     Dim minRow() As Double: ReDim minRow(1 To totalParts)
     Dim maxRow() As Double: ReDim maxRow(1 To totalParts)
+    Dim minC1() As Double: ReDim minC1(1 To totalParts)
+    Dim maxC1() As Double: ReDim maxC1(1 To totalParts)
+    Dim minC2() As Double: ReDim minC2(1 To totalParts)
+    Dim maxC2() As Double: ReDim maxC2(1 To totalParts)
     Dim mainOffset() As Double: ReDim mainOffset(1 To totalParts)
+    Dim cross1 As String, cross2 As String
+    GetCrossAxes explodeDir, cross1, cross2
     
     Dim skippedCount As Integer: skippedCount = 0
     Dim validCount As Integer: validCount = 0
@@ -183,7 +194,7 @@ Sub CATMain()
         If explodeMode = 1 Then
             Dim searchText As String
             On Error Resume Next
-            searchText = UCase(prod.PartNumber)
+            searchText = UCase(prod.PartNumber & " " & prod.Name & " " & prod.Nomenclature & " " & prod.Definition)
             On Error GoTo 0
             
             ' Leave "VALVE PIN" horizontal, rotate everything else
@@ -209,12 +220,19 @@ Sub CATMain()
         
         validCount = validCount + 1
         Set prods(validCount) = prod
-        origM(validCount) = origM(validCount)
+        origM(validCount) = m
         
         For k = 0 To 8: orient(validCount, k) = baseM(k): Next
         
         minMain(validCount) = outMn
         maxMain(validCount) = outMx
+        
+        GetRelativeProjectedExtents prod, baseM, cross1, outMn, outMx
+        minC1(validCount) = outMn
+        maxC1(validCount) = outMx
+        GetRelativeProjectedExtents prod, baseM, cross2, outMn, outMx
+        minC2(validCount) = outMn
+        maxC2(validCount) = outMx
         
         If useRows Then
             GetRelativeProjectedExtents prod, baseM, rowDir, outMn, outMx
@@ -245,10 +263,8 @@ NextSelectedProduct:
     rowCount = (totalParts + partsPerRow - 1) \ partsPerRow
 
     Dim rowStartShift() As Double: ReDim rowStartShift(0 To rowCount - 1)
-    Dim rowOffset() As Double: ReDim rowOffset(0 To rowCount - 1)
+    Dim rowTarget() As Double: ReDim rowTarget(0 To rowCount - 1)
     Dim rowWidth() As Double: ReDim rowWidth(0 To rowCount - 1)
-    Dim rowMinVal() As Double: ReDim rowMinVal(0 To rowCount - 1)
-    Dim rowMaxVal() As Double: ReDim rowMaxVal(0 To rowCount - 1)
 
     Dim firstM As Variant
     firstM = origM(1)
@@ -291,20 +307,18 @@ NextSelectedProduct:
             lastIndex = firstIndex + partsPerRow - 1
             If lastIndex > totalParts Then lastIndex = totalParts
 
-            rowMinVal(R) = 99999999#
-            rowMaxVal(R) = -99999999#
-
+            Dim maxPartWidth As Double: maxPartWidth = 0#
             For i = firstIndex To lastIndex
-                If minRow(i) < rowMinVal(R) Then rowMinVal(R) = minRow(i)
-                If maxRow(i) > rowMaxVal(R) Then rowMaxVal(R) = maxRow(i)
+                Dim pWidth As Double: pWidth = maxRow(i) - minRow(i)
+                If pWidth > maxPartWidth Then maxPartWidth = pWidth
             Next
 
             If R = 0 Then
-                rowOffset(R) = -rowMinVal(R)
-                rowVisualMax = rowOffset(R) + rowMaxVal(R)
+                rowTarget(R) = 0
+                rowVisualMax = maxPartWidth / 2#
             Else
-                rowOffset(R) = rowVisualMax + rowGap - rowMinVal(R)
-                rowVisualMax = rowOffset(R) + rowMaxVal(R)
+                rowTarget(R) = rowVisualMax + rowGap + maxPartWidth / 2#
+                rowVisualMax = rowTarget(R) + maxPartWidth / 2#
             End If
         Next
     End If
@@ -327,12 +341,17 @@ NextSelectedProduct:
     For i = 1 To totalParts
         Dim finalM(11) As Variant
         For k = 0 To 8: finalM(k) = orient(i, k): Next
-        finalM(9) = startX: finalM(10) = startY: finalM(11) = startZ
+        
+        Dim oM As Variant: oM = origM(i)
+        finalM(9) = oM(9): finalM(10) = oM(10): finalM(11) = oM(11)
+
+        ApplyAxisOffset finalM, cross1, -(minC1(i) + maxC1(i)) / 2#, startX, startY, startZ
+        ApplyAxisOffset finalM, cross2, -(minC2(i) + maxC2(i)) / 2#, startX, startY, startZ
 
         R = (i - 1) \ partsPerRow
         ApplyAxisOffset finalM, explodeDir, rowStartShift(R) + mainOffset(i), startX, startY, startZ
         If useRows Then
-            ApplyAxisOffset finalM, rowDir, rowOffset(R), startX, startY, startZ
+            ApplyAxisOffset finalM, rowDir, rowTarget(R) - (minRow(i) + maxRow(i)) / 2#, startX, startY, startZ
         End If
 
         prods(i).Position.SetComponents finalM
@@ -356,7 +375,7 @@ NextSelectedProduct:
             C.Activate
         Next
     End If
-    On Error GoTo SafeFail
+    On Error GoTo 0
     
     activeDoc.Product.Update
     
@@ -376,9 +395,27 @@ NextSelectedProduct:
     Exit Sub
 
 SafeFail:
+    Dim errNum As Long, errDesc As String
+    errNum = Err.Number
+    errDesc = Err.Description
+    
     On Error Resume Next
+    For i = 1 To totalParts
+        Dim failRestoreM(11) As Variant
+        Dim failTmpM As Variant: failTmpM = origM(i)
+        For k = 0 To 11: failRestoreM(k) = failTmpM(k): Next
+        prods(i).Position.SetComponents failRestoreM
+    Next
+    
+    If Not constraints Is Nothing Then
+        For Each C In constraints
+            C.Activate
+        Next
+    End If
+    
+    activeDoc.Product.Update
     CATIA.ActiveDocument.Selection.Clear
-    MsgBox "Macro stopped safely." & vbCrLf & "Error Number : " & Err.Number & vbCrLf & "Description : " & Err.Description, vbExclamation, "Safe Stop"
+    MsgBox "Macro stopped safely." & vbCrLf & "Error Number : " & errNum & vbCrLf & "Description : " & errDesc, vbExclamation, "Safe Stop"
 End Sub
 
 ' =====================================================
@@ -394,7 +431,7 @@ Sub GetRelativeProjectedExtents(oProd As Object, ByRef baseM() As Variant, axisD
     rootM(6) = baseM(6): rootM(7) = baseM(7): rootM(8) = baseM(8)
     rootM(9) = 0#: rootM(10) = 0#: rootM(11) = 0#
     
-    If oProd.Products.count > 0 Then
+    If oProd.Products.Count > 0 Then
         Dim child As Object
         For Each child In oProd.Products
             RecursiveGetRelative child, rootM, axisDir, outMin, outMax, False
@@ -425,7 +462,7 @@ Sub RecursiveGetRelative(oItem As Object, ByRef parentM() As Variant, axisDir As
         MultiplyMatricesCATIA parentM, itemLocalM, itemGlobalM
     End If
     
-    If oItem.Products.count > 0 Then
+    If oItem.Products.Count > 0 Then
         Dim child As Object
         For Each child In oItem.Products
             RecursiveGetRelative child, itemGlobalM, axisDir, outMin, outMax, False
@@ -438,16 +475,10 @@ Sub RecursiveGetRelative(oItem As Object, ByRef parentM() As Variant, axisDir As
             On Error GoTo 0
             
             If Not oPart Is Nothing Then
-                Dim targetBody As Object: Set targetBody = Nothing
-                On Error Resume Next
-                Set targetBody = oPart.MainBody
-                On Error GoTo 0
-                
-                If Not targetBody Is Nothing And Not IsObjectInactive(targetBody) Then
-                    Dim lMinX As Double, lMaxX As Double, lMinY As Double, lMaxY As Double, lMinZ As Double, lMaxZ As Double
-                    If GetLocalBBox(oPart, targetBody, lMinX, lMaxX, lMinY, lMaxY, lMinZ, lMaxZ) Then
-                        
-                        Dim corners(7, 2) As Double
+                Dim lMinX As Double, lMaxX As Double, lMinY As Double, lMaxY As Double, lMinZ As Double, lMaxZ As Double
+                If GetLocalBBox(oPart, lMinX, lMaxX, lMinY, lMaxY, lMinZ, lMaxZ) Then
+                    
+                    Dim corners(7, 2) As Double
                         corners(0, 0) = lMinX: corners(0, 1) = lMinY: corners(0, 2) = lMinZ
                         corners(1, 0) = lMaxX: corners(1, 1) = lMinY: corners(1, 2) = lMinZ
                         corners(2, 0) = lMinX: corners(2, 1) = lMaxY: corners(2, 2) = lMinZ
@@ -470,7 +501,6 @@ Sub RecursiveGetRelative(oItem As Object, ByRef parentM() As Variant, axisDir As
                             If projected > outMax Then outMax = projected
                         Next
                     End If
-                End If
             End If
         End If
     End If
@@ -515,19 +545,19 @@ Sub RotateMatrixGlobal(ByRef matrix() As Variant, ByVal axis As String, ByVal an
     End If
 End Sub
 
-Sub MultiplyMatricesCATIA(ByRef A() As Variant, ByRef B() As Variant, ByRef C() As Variant)
-    C(0) = A(0) * B(0) + A(3) * B(1) + A(6) * B(2)
-    C(1) = A(1) * B(0) + A(4) * B(1) + A(7) * B(2)
-    C(2) = A(2) * B(0) + A(5) * B(1) + A(8) * B(2)
-    C(3) = A(0) * B(3) + A(3) * B(4) + A(6) * B(5)
-    C(4) = A(1) * B(3) + A(4) * B(4) + A(7) * B(5)
-    C(5) = A(2) * B(3) + A(5) * B(4) + A(8) * B(5)
-    C(6) = A(0) * B(6) + A(3) * B(7) + A(6) * B(8)
-    C(7) = A(1) * B(6) + A(4) * B(7) + A(7) * B(8)
-    C(8) = A(2) * B(6) + A(5) * B(7) + A(8) * B(8)
-    C(9) = A(0) * B(9) + A(3) * B(10) + A(6) * B(11) + A(9)
-    C(10) = A(1) * B(9) + A(4) * B(10) + A(7) * B(11) + A(10)
-    C(11) = A(2) * B(9) + A(5) * B(10) + A(8) * B(11) + A(11)
+Sub MultiplyMatricesCATIA(ByRef A() As Variant, ByRef b() As Variant, ByRef C() As Variant)
+    C(0) = A(0) * b(0) + A(3) * b(1) + A(6) * b(2)
+    C(1) = A(1) * b(0) + A(4) * b(1) + A(7) * b(2)
+    C(2) = A(2) * b(0) + A(5) * b(1) + A(8) * b(2)
+    C(3) = A(0) * b(3) + A(3) * b(4) + A(6) * b(5)
+    C(4) = A(1) * b(3) + A(4) * b(4) + A(7) * b(5)
+    C(5) = A(2) * b(3) + A(5) * b(4) + A(8) * b(5)
+    C(6) = A(0) * b(6) + A(3) * b(7) + A(6) * b(8)
+    C(7) = A(1) * b(6) + A(4) * b(7) + A(7) * b(8)
+    C(8) = A(2) * b(6) + A(5) * b(7) + A(8) * b(8)
+    C(9) = A(0) * b(9) + A(3) * b(10) + A(6) * b(11) + A(9)
+    C(10) = A(1) * b(9) + A(4) * b(10) + A(7) * b(11) + A(10)
+    C(11) = A(2) * b(9) + A(5) * b(10) + A(8) * b(11) + A(11)
 End Sub
 
 Sub ApplyAxisOffset(ByRef m() As Variant, dirText As String, offsetValue As Double, startX As Double, startY As Double, startZ As Double)
@@ -552,9 +582,43 @@ Function GetProjectedCoord(x As Double, y As Double, z As Double, dirText As Str
     End Select
 End Function
 
-Function GetLocalBBox(oPart As Object, targetBody As Object, ByRef mnX As Double, ByRef mxX As Double, ByRef mnY As Double, ByRef mxY As Double, ByRef mnZ As Double, ByRef mxZ As Double) As Boolean
-    On Error GoTo Failed
+Function GetLocalBBox(oPart As Object, ByRef mnX As Double, ByRef mxX As Double, ByRef mnY As Double, ByRef mxY As Double, ByRef mnZ As Double, ByRef mxZ As Double) As Boolean
     GetLocalBBox = False
+    
+    Dim targetBody As Object
+    On Error Resume Next
+    Set targetBody = oPart.MainBody
+    On Error GoTo 0
+    If Not targetBody Is Nothing Then
+        If TryMeasureBody(oPart, targetBody, mnX, mxX, mnY, mxY, mnZ, mxZ) Then
+            GetLocalBBox = True
+            Exit Function
+        End If
+    End If
+    
+    Dim b As Object
+    For Each b In oPart.Bodies
+        If TryMeasureBody(oPart, b, mnX, mxX, mnY, mxY, mnZ, mxZ) Then
+            GetLocalBBox = True
+            Exit Function
+        End If
+    Next
+    
+    Dim hb As Object
+    For Each hb In oPart.HybridBodies
+        If TryMeasureBody(oPart, hb, mnX, mxX, mnY, mxY, mnZ, mxZ) Then
+            GetLocalBBox = True
+            Exit Function
+        End If
+    Next
+End Function
+
+Function TryMeasureBody(oPart As Object, targetBody As Object, ByRef mnX As Double, ByRef mxX As Double, ByRef mnY As Double, ByRef mxY As Double, ByRef mnZ As Double, ByRef mxZ As Double) As Boolean
+    On Error GoTo Failed
+    TryMeasureBody = False
+    
+    If IsObjectInactive(targetBody) Then Exit Function
+    
     Dim hsf As Object: Set hsf = oPart.HybridShapeFactory
     Dim tempSet As Object: Set tempSet = oPart.HybridBodies.Add()
     tempSet.Name = "__BBox_Temp__"
@@ -617,18 +681,29 @@ Function GetLocalBBox(oPart As Object, targetBody As Object, ByRef mnX As Double
     cleanupSel.Clear: cleanupSel.Add tempSet: cleanupSel.Delete: cleanupSel.Clear
     oPart.Update
 
-    GetLocalBBox = True
+    TryMeasureBody = True
     Exit Function
 Failed:
     On Error Resume Next
     Dim errSel As Object: Set errSel = CATIA.ActiveDocument.Selection
     If Not tempSet Is Nothing Then errSel.Clear: errSel.Add tempSet: errSel.Delete: errSel.Clear
-    GetLocalBBox = False
+    TryMeasureBody = False
 End Function
 
 ' =====================================================
 ' SCENE & HELPER FUNCTIONS
 ' =====================================================
+Sub GetCrossAxes(ByVal mainDir As String, ByRef c1 As String, ByRef c2 As String)
+    Dim m As String: m = UCase(Right(mainDir, 1))
+    If m = "X" Then
+        c1 = "Y": c2 = "Z"
+    ElseIf m = "Y" Then
+        c1 = "X": c2 = "Z"
+    Else
+        c1 = "X": c2 = "Y"
+    End If
+End Sub
+
 Function CheckSceneExists(prodDoc As Object, sceneName As String, ByRef finalSceneName As String, ByRef sceneExistsChoice As VbMsgBoxResult) As Boolean
     CheckSceneExists = False
     Dim rootProd As Object: Set rootProd = prodDoc.Product
@@ -636,7 +711,7 @@ Function CheckSceneExists(prodDoc As Object, sceneName As String, ByRef finalSce
 
     Dim i As Integer, sc As Object, sceneExists As Boolean
     sceneExists = False
-    For i = 1 To scenes.count
+    For i = 1 To scenes.Count
         Set sc = scenes.Item(i)
         If Not sc Is Nothing Then
             If StrComp(sc.Name, sceneName, vbTextCompare) = 0 Then
@@ -670,7 +745,7 @@ Function CreateSceneFromCurrentState(prodDoc As Object, sceneName As String, fin
 
     If sceneExistsChoice = vbYes Then
         Dim i As Integer, sc As Object, existingScene As Object
-        For i = 1 To scenes.count
+        For i = 1 To scenes.Count
             Set sc = scenes.Item(i)
             If Not sc Is Nothing Then
                 If StrComp(sc.Name, sceneName, vbTextCompare) = 0 Then
@@ -709,7 +784,7 @@ Function ProductSceneNameExists(scenes As Object, sceneName As String) As Boolea
     On Error Resume Next
     ProductSceneNameExists = False
     Dim i As Integer, sc As Object
-    For i = 1 To scenes.count
+    For i = 1 To scenes.Count
         Set sc = scenes.Item(i)
         If Err.Number = 0 And Not sc Is Nothing Then
             If StrComp(CStr(sc.Name), sceneName, vbTextCompare) = 0 Then

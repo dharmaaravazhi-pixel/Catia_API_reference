@@ -18,21 +18,19 @@ Sub CATMain()
     Dim viewCount As Integer
     viewCount = 0
     Dim views() As Object
-    ReDim views(1 To sel.Count)
+    ReDim views(1 To sel.count)
     
     Dim i As Integer
-    For i = 1 To sel.Count
+    For i = 1 To sel.count
         If TypeName(sel.Item(i).Value) = "DrawingView" Then
             Dim vObj As Object
             Set vObj = sel.Item(i).Value
             Dim vName As String
             vName = UCase(vObj.Name)
             
-            ' Ultra-aggressive filter for Main and Background views
             If vObj.ViewType <> 0 And vObj.ViewType <> 13 And vObj.ViewType <> 12 Then
                 If InStr(vName, "MAIN VIEW") = 0 And InStr(vName, "BACKGROUND VIEW") = 0 And InStr(vName, "CALQUE") = 0 Then
                     
-                    ' Ensure we don't add the exact same view multiple times!
                     Dim isUnique As Boolean
                     isUnique = True
                     Dim k As Integer
@@ -57,7 +55,6 @@ Sub CATMain()
         Exit Sub
     End If
 
-    ' --- 1. BASIC SPACING INPUTS ---
     Dim modeStr As String
     modeStr = InputBox("Enter 'H' for Horizontal Alignment, or 'V' for Vertical Alignment:", "Alignment Mode", "H")
     If modeStr = "" Then Exit Sub
@@ -69,8 +66,6 @@ Sub CATMain()
     Dim gap As Double
     gap = CDbl(gapStr)
     
-    ' --- 2. GLOBAL SORTING ---
-    ' Sort ALL views globally based on view origin (Top-to-Bottom for H, Left-to-Right for V)
     Dim j As Integer
     For i = 1 To viewCount - 1
         For j = i + 1 To viewCount
@@ -78,9 +73,9 @@ Sub CATMain()
             swap = False
             
             If modeStr = "H" Then
-                If views(i).y < views(j).y Then swap = True ' Descending Y (Top to Bottom)
+                If views(i).y < views(j).y Then swap = True
             Else
-                If views(i).x > views(j).x Then swap = True ' Ascending X (Left to Right)
+                If views(i).x > views(j).x Then swap = True
             End If
             
             If swap Then
@@ -89,15 +84,13 @@ Sub CATMain()
         Next
     Next
 
-    ' --- 3. ROW GROUPING ---
-    ' Group views into Rows based on view origin
     Dim groupStart() As Integer: ReDim groupStart(1 To viewCount)
     Dim groupEnd() As Integer: ReDim groupEnd(1 To viewCount)
     Dim groupCount As Integer: groupCount = 1
     
     groupStart(1) = 1
     Dim targetGroupOrigin As Double
-    Dim groupTolerance As Double: groupTolerance = 30 ' Hardcoded 30mm tolerance for rows
+    Dim groupTolerance As Double: groupTolerance = 30
     
     If modeStr = "H" Then
         targetGroupOrigin = views(1).y
@@ -109,10 +102,7 @@ Sub CATMain()
         Dim diff As Double
         If modeStr = "H" Then diff = Abs(views(i).y - targetGroupOrigin) Else diff = Abs(views(i).x - targetGroupOrigin)
         
-        If diff < groupTolerance Then
-            ' Same row group!
-        Else
-            ' New row group!
+        If diff >= groupTolerance Then
             groupEnd(groupCount) = i - 1
             groupCount = groupCount + 1
             groupStart(groupCount) = i
@@ -125,20 +115,19 @@ Sub CATMain()
     Next
     groupEnd(groupCount) = viewCount
 
-    ' --- 4. CHECK FOR LEADER TEXT ---
     Dim hasAnyLeaderText As Boolean
     hasAnyLeaderText = False
     Dim chkView As Integer, chkTxt As Integer
     For chkView = 1 To viewCount
         Dim chkTexts As Object: Set chkTexts = views(chkView).Texts
-        For chkTxt = 1 To chkTexts.Count
+        For chkTxt = 1 To chkTexts.count
             On Error Resume Next
-            If chkTexts.Item(chkTxt).Leaders.Count > 0 Then
+            If chkTexts.Item(chkTxt).Leaders.count > 0 Then
                 activeDoc.Selection.Clear
                 activeDoc.Selection.Add chkTexts.Item(chkTxt)
                 Dim showState As CatVisPropertyShow
                 activeDoc.Selection.VisProperties.GetShow showState
-                If showState = catVisPropertyShowAttr Then ' 0 = catVisPropertyShowAttr (Visible)
+                If showState = catVisPropertyShowAttr Then
                     hasAnyLeaderText = True
                     Exit For
                 End If
@@ -149,7 +138,6 @@ Sub CATMain()
     Next
     activeDoc.Selection.Clear
 
-    ' --- 5. ROW GAP AND ALTERNATE TEXT INPUTS ---
     Dim rowGap As Double
     rowGap = 0
     Dim altRows As Boolean
@@ -168,7 +156,6 @@ Sub CATMain()
         End If
     End If
 
-    ' --- 6. TEXT FORMATTING INPUTS ---
     Dim isAngleMode As Boolean
     Dim txtXTarget As Double
     Dim angleDeg As Double
@@ -205,7 +192,6 @@ Sub CATMain()
         End If
     End If
 
-    ' --- 7. APPLY TEXT ALIGNMENT ---
     Dim gIdx As Integer
     If hasAnyLeaderText Then
         For gIdx = 1 To groupCount
@@ -215,7 +201,6 @@ Sub CATMain()
             Dim currentAngleDeg As Double
             currentAngleDeg = angleDeg
             
-            ' Apply the Mirror Effect for alternating rows
             If altRows And isEvenRow And isAngleMode Then
                 currentAngleDeg = 360 - angleDeg
             End If
@@ -224,11 +209,11 @@ Sub CATMain()
                 Dim vObjSetup As Object: Set vObjSetup = views(i)
                 Dim textsSetup As Object: Set textsSetup = vObjSetup.Texts
                 Dim txtIdx As Integer
-                For txtIdx = 1 To textsSetup.Count
+                For txtIdx = 1 To textsSetup.count
                     Dim txtAlign As Object: Set txtAlign = textsSetup.Item(txtIdx)
                     Dim hasLeaderAlign As Boolean: hasLeaderAlign = False
                     On Error Resume Next
-                    If txtAlign.Leaders.Count > 0 Then hasLeaderAlign = True
+                    If txtAlign.Leaders.count > 0 Then hasLeaderAlign = True
                     On Error GoTo 0
                     
                     If hasLeaderAlign Then
@@ -236,7 +221,7 @@ Sub CATMain()
                         activeDoc.Selection.Add txtAlign
                         Dim state As CatVisPropertyShow
                         activeDoc.Selection.VisProperties.GetShow state
-                        If state = catVisPropertyShowAttr Then ' Only align visible texts
+                        If state = catVisPropertyShowAttr Then
                             txtAlign.Angle = textRotAngle
                             Call AlignLeaderText(txtAlign, isAngleMode, currentAngleDeg, txtXTarget, baseYTarget)
                         End If
@@ -246,7 +231,6 @@ Sub CATMain()
         Next
     End If
 
-    ' --- 7. CALCULATE CENTER COORDINATES (Post-Text Alignment) ---
     Dim cx() As Double: ReDim cx(1 To viewCount)
     Dim cy() As Double: ReDim cy(1 To viewCount)
     
@@ -257,7 +241,6 @@ Sub CATMain()
         cy(i) = sCalc(2) + (sCalc(3) - sCalc(2)) / 2#
     Next
 
-    ' --- 8. FINAL VIEW SPACING ---
     Dim previousRowBottomEdge As Double
     Dim previousRowRightEdge As Double
     
@@ -265,15 +248,14 @@ Sub CATMain()
         Dim gStart As Integer: gStart = groupStart(gIdx)
         Dim gEnd As Integer: gEnd = groupEnd(gIdx)
         
-        ' Sort the views WITHIN this row along the spacing axis
         For i = gStart To gEnd - 1
             For j = i + 1 To gEnd
                 Dim swap2 As Boolean
                 swap2 = False
                 If modeStr = "H" Then
-                    If views(i).x > views(j).x Then swap2 = True ' Left to Right
+                    If views(i).x > views(j).x Then swap2 = True
                 Else
-                    If views(i).y < views(j).y Then swap2 = True ' Top to Bottom
+                    If views(i).y < views(j).y Then swap2 = True
                 End If
                 
                 If swap2 Then
@@ -285,16 +267,13 @@ Sub CATMain()
             Next
         Next
 
-        ' Mathematically calculate the Target Centerline for this Row
         Dim targetCX As Double
         Dim targetCY As Double
         
         If gIdx = 1 Then
-            ' First row stays at its original visual centerline
             targetCX = cx(gStart)
             targetCY = cy(gStart)
         Else
-            ' Calculate offset to space the row perfectly
             If modeStr = "H" Then
                 Dim maxUpperExtent As Double: maxUpperExtent = -999999#
                 For i = gStart To gEnd
@@ -324,23 +303,20 @@ Sub CATMain()
             End If
         End If
         
-        ' Apply Spacing & Alignment for this Row
         Dim v1 As Object: Set v1 = views(gStart)
         Dim s1(3) As Variant
         v1.Size s1
         
         Dim currentEdge As Double
         If modeStr = "H" Then
-            currentEdge = s1(1) + gap ' Starting X edge for the next view in the row
+            currentEdge = s1(1) + gap
         Else
-            currentEdge = s1(2) - gap ' Starting Y edge for the next view in the column
+            currentEdge = s1(2) - gap
         End If
         
-        ' Track the absolute bounds of this row to use for the next row
         Dim currentGroupBottomEdge As Double: currentGroupBottomEdge = 999999#
         Dim currentGroupRightEdge As Double: currentGroupRightEdge = -999999#
 
-        ' Process EVERY view in the group
         For i = gStart To gEnd
             Dim v As Object: Set v = views(i)
             Dim s(3) As Variant
@@ -358,14 +334,12 @@ Sub CATMain()
             Dim localCenterY As Double: localCenterY = localYMn + (localYMx - localYMn) / 2#
             
             If i = gStart Then
-                ' First view: Just snap it to the row centerline, don't move it along the spacing axis
                 If modeStr = "H" Then
                     v.y = targetCY - localCenterY
                 Else
                     v.x = targetCX - localCenterX
                 End If
             Else
-                ' Subsequent views: Snap to centerline AND space along the edge
                 If modeStr = "H" Then
                     v.x = currentEdge - localXMn
                     v.y = targetCY - localCenterY
@@ -377,14 +351,10 @@ Sub CATMain()
                 End If
             End If
             
-            ' Texts are already perfectly aligned relative to the views from Step 6!
-            
-            ' Update absolute bounds for the row
             If v.y + localYMn < currentGroupBottomEdge Then currentGroupBottomEdge = v.y + localYMn
             If v.x + localXMx > currentGroupRightEdge Then currentGroupRightEdge = v.x + localXMx
         Next
         
-        ' Store the bounds of this row to use as the starting point for the next row!
         previousRowBottomEdge = currentGroupBottomEdge
         previousRowRightEdge = currentGroupRightEdge
     Next
@@ -392,20 +362,15 @@ Sub CATMain()
     activeDoc.Selection.Clear
 End Sub
 
-' --- STABILIZED LEADER TEXT CONTROL ---
-' This subroutine robustly handles the positioning of a DrawingText object
-' based on a desired leader angle or fixed X offset, while dynamically 
-' adjusting the text's anchor orientation to prevent it from overlapping the leader.
 Sub AlignLeaderText(ByRef txtObj As Object, ByVal useAngle As Boolean, ByVal angleDeg As Double, ByVal targetX As Double, ByVal targetYAbs As Double)
     
     On Error Resume Next
     Dim hasLeader As Boolean
-    hasLeader = (txtObj.Leaders.Count > 0)
+    hasLeader = (txtObj.Leaders.count > 0)
     On Error GoTo 0
     
     If Not hasLeader Then Exit Sub
     
-    ' 1. Determine Y Position (Top or Bottom based on angle)
     Dim finalY As Double
     Dim tempAngle As Double
     If useAngle Then
@@ -417,7 +382,6 @@ Sub AlignLeaderText(ByRef txtObj As Object, ByVal useAngle As Boolean, ByVal ang
             tempAngle = tempAngle + 360
         Loop
         
-        ' > 180 means it points DOWN, so text should be placed BELOW the part
         If tempAngle > 180 And tempAngle < 360 Then
             finalY = -Abs(targetYAbs)
         Else
@@ -432,7 +396,6 @@ Sub AlignLeaderText(ByRef txtObj As Object, ByVal useAngle As Boolean, ByVal ang
     End If
     txtObj.y = finalY
     
-    ' 2. Determine X Position relative to Leader Arrow Head
     Dim headX As Double, headY As Double
     txtObj.Leaders.Item(1).GetPoint 1, headX, headY
     
@@ -457,9 +420,9 @@ Sub AlignLeaderText(ByRef txtObj As Object, ByVal useAngle As Boolean, ByVal ang
         If safeAngle > 90 Then safeAngle = 180 - safeAngle
         
         If safeAngle = 90 Then
-            finalX = headX ' Perfectly vertical leader
+            finalX = headX
         ElseIf safeAngle = 0 Then
-            finalX = txtObj.x ' Cannot reach Y offset with 0 degrees, retain current X
+            finalX = txtObj.x
         Else
             Dim PI As Double: PI = 3.14159265358979
             Dim angleRad As Double: angleRad = safeAngle * PI / 180#
@@ -479,37 +442,34 @@ Sub AlignLeaderText(ByRef txtObj As Object, ByVal useAngle As Boolean, ByVal ang
     
     txtObj.x = finalX
     
-    ' Determine which side the text ended up on
     isLeftSide = (finalX < headX)
     
-    ' 3. Set Text Orientation (Anchor Position)
     On Error Resume Next
     Dim isVertText As Boolean
     isVertText = (txtObj.Angle = 90 Or txtObj.Angle = 270 Or txtObj.Angle = -90)
     
     If useAngle And safeAngle = 90 Then
-        ' Perfectly straight vertical line (90 or 270 angle)
         If isVertText Then
             If finalY >= headY Then
-                txtObj.AnchorPosition = 4 ' catMiddleLeft (Bottom of rotated text, grows UP)
+                txtObj.AnchorPosition = 4
             Else
-                txtObj.AnchorPosition = 6 ' catMiddleRight (Top of rotated text, grows DOWN)
+                txtObj.AnchorPosition = 6
             End If
         Else
             If finalY >= headY Then
-                txtObj.AnchorPosition = 8 ' BottomCenter
+                txtObj.AnchorPosition = 8
             Else
-                txtObj.AnchorPosition = 2 ' TopCenter
+                txtObj.AnchorPosition = 2
             End If
         End If
     Else
-        ' Standard angled leader with tail
         If isLeftSide Then
-            txtObj.AnchorPosition = 6 ' catMiddleRight (grows leftwards)
+            txtObj.AnchorPosition = 6
         Else
-            txtObj.AnchorPosition = 4 ' catMiddleLeft (grows rightwards)
+            txtObj.AnchorPosition = 4
         End If
     End If
     On Error GoTo 0
 
 End Sub
+

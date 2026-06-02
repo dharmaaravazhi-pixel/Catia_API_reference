@@ -86,7 +86,13 @@ Sub CATMain()
         GlobalMaxZ = -99999999
         GlobalMinZ = 99999999
 
-        ProcessProduct selectedItem
+        Dim identityMatrix(11) As Double
+        identityMatrix(0) = 1: identityMatrix(1) = 0: identityMatrix(2) = 0
+        identityMatrix(3) = 0: identityMatrix(4) = 1: identityMatrix(5) = 0
+        identityMatrix(6) = 0: identityMatrix(7) = 0: identityMatrix(8) = 1
+        identityMatrix(9) = 0: identityMatrix(10) = 0: identityMatrix(11) = 0
+
+        ProcessProduct selectedItem, identityMatrix
 
         If GlobalMaxX <> -99999999 Then
             DisplayResult selectedItem.PartNumber, GlobalMinX, GlobalMaxX, GlobalMinY, GlobalMaxY, GlobalMinZ, GlobalMaxZ
@@ -96,26 +102,45 @@ Sub CATMain()
     End If
 End Sub
 
-Sub ProcessProduct(oProd As Object)
+Sub ProcessProduct(oProd As Object, currentMatrix() As Double)
     On Error Resume Next
 
     If oProd.Products.count > 0 Then
         Dim child As Object
 
         For Each child In oProd.Products
-            ProcessProduct child
+            Dim locMat(11) As Variant
+            Err.Clear
+            child.Position.GetComponents locMat
+            
+            Dim nextMatrix(11) As Double
+            If Err.Number = 0 Then
+                nextMatrix(0) = currentMatrix(0) * locMat(0) + currentMatrix(3) * locMat(1) + currentMatrix(6) * locMat(2)
+                nextMatrix(1) = currentMatrix(1) * locMat(0) + currentMatrix(4) * locMat(1) + currentMatrix(7) * locMat(2)
+                nextMatrix(2) = currentMatrix(2) * locMat(0) + currentMatrix(5) * locMat(1) + currentMatrix(8) * locMat(2)
+                
+                nextMatrix(3) = currentMatrix(0) * locMat(3) + currentMatrix(3) * locMat(4) + currentMatrix(6) * locMat(5)
+                nextMatrix(4) = currentMatrix(1) * locMat(3) + currentMatrix(4) * locMat(4) + currentMatrix(7) * locMat(5)
+                nextMatrix(5) = currentMatrix(2) * locMat(3) + currentMatrix(5) * locMat(4) + currentMatrix(8) * locMat(5)
+                
+                nextMatrix(6) = currentMatrix(0) * locMat(6) + currentMatrix(3) * locMat(7) + currentMatrix(6) * locMat(8)
+                nextMatrix(7) = currentMatrix(1) * locMat(6) + currentMatrix(4) * locMat(7) + currentMatrix(7) * locMat(8)
+                nextMatrix(8) = currentMatrix(2) * locMat(6) + currentMatrix(5) * locMat(7) + currentMatrix(8) * locMat(8)
+                
+                nextMatrix(9) = currentMatrix(0) * locMat(9) + currentMatrix(3) * locMat(10) + currentMatrix(6) * locMat(11) + currentMatrix(9)
+                nextMatrix(10) = currentMatrix(1) * locMat(9) + currentMatrix(4) * locMat(10) + currentMatrix(7) * locMat(11) + currentMatrix(10)
+                nextMatrix(11) = currentMatrix(2) * locMat(9) + currentMatrix(5) * locMat(10) + currentMatrix(8) * locMat(11) + currentMatrix(11)
+            Else
+                Dim k As Integer
+                For k = 0 To 11
+                    nextMatrix(k) = currentMatrix(k)
+                Next
+            End If
+
+            ProcessProduct child, nextMatrix
         Next
 
     Else
-        Dim matrix(11) As Variant
-        Err.Clear
-        oProd.Position.GetComponents matrix
-
-        If Err.Number <> 0 Then
-            Err.Clear
-            Exit Sub
-        End If
-
         Dim oPart As Object
         Set oPart = oProd.ReferenceProduct.Parent.Part
 
@@ -155,9 +180,9 @@ Sub ProcessProduct(oProd As Object)
             For i = 0 To 7
                 Dim gx As Double, gy As Double, gz As Double
 
-                gx = matrix(0) * corners(i, 0) + matrix(1) * corners(i, 1) + matrix(2) * corners(i, 2) + matrix(9)
-                gy = matrix(3) * corners(i, 0) + matrix(4) * corners(i, 1) + matrix(5) * corners(i, 2) + matrix(10)
-                gz = matrix(6) * corners(i, 0) + matrix(7) * corners(i, 1) + matrix(8) * corners(i, 2) + matrix(11)
+                gx = corners(i, 0) * currentMatrix(0) + corners(i, 1) * currentMatrix(3) + corners(i, 2) * currentMatrix(6) + currentMatrix(9)
+                gy = corners(i, 0) * currentMatrix(1) + corners(i, 1) * currentMatrix(4) + corners(i, 2) * currentMatrix(7) + currentMatrix(10)
+                gz = corners(i, 0) * currentMatrix(2) + corners(i, 1) * currentMatrix(5) + corners(i, 2) * currentMatrix(8) + currentMatrix(11)
 
                 If gx > GlobalMaxX Then GlobalMaxX = gx
                 If gx < GlobalMinX Then GlobalMinX = gx
@@ -335,4 +360,3 @@ Sub DisplayResult(itemName As String, mnX As Double, mxX As Double, _
            "Min Z : " & Format(mnZ, "0.000") & "  |  Max Z : " & Format(mxZ, "0.000"), _
            vbInformation, "Bounding Box Result"
 End Sub
-

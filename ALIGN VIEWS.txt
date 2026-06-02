@@ -18,17 +18,17 @@ Sub CATMain()
     Dim viewCount As Integer
     viewCount = 0
     Dim views() As Object
-    ReDim views(1 To sel.count)
+    ReDim views(1 To sel.Count)
     
     Dim i As Integer
-    For i = 1 To sel.count
-        If TypeName(sel.Item(i).Value) = "DrawingView" Then
+    For i = 1 To sel.Count
+        If sel.Item(i).Type = "DrawingView" Or TypeName(sel.Item(i).Value) = "DrawingView" Then
             Dim vObj As Object
             Set vObj = sel.Item(i).Value
             Dim vName As String
             vName = UCase(vObj.Name)
             
-            If vObj.ViewType <> 0 And vObj.ViewType <> 13 And vObj.ViewType <> 12 Then
+            If vObj.ViewType <> 0 And vObj.ViewType <> 13 Then
                 If InStr(vName, "MAIN VIEW") = 0 And InStr(vName, "BACKGROUND VIEW") = 0 And InStr(vName, "CALQUE") = 0 Then
                     
                     Dim isUnique As Boolean
@@ -51,7 +51,10 @@ Sub CATMain()
     Next
 
     If viewCount < 2 Then
-        MsgBox "Please select at least 2 valid Drawing Views.", vbExclamation, "Invalid Selection"
+        MsgBox "CATIA found " & viewCount & " valid views in your selection of " & sel.Count & " total items." & vbCrLf & vbCrLf & _
+               "1. If 'total items' is 0: CATIA wiped your selection when you launched the macro. (This happens if you run it from the Macro Dialog instead of a custom Toolbar Icon)." & vbCrLf & _
+               "2. If 'total items' is > 0: CATIA sees your selection, but they are not registering as standard Drawing Views.", _
+               vbExclamation, "Invalid Selection"
         Exit Sub
     End If
 
@@ -120,9 +123,9 @@ Sub CATMain()
     Dim chkView As Integer, chkTxt As Integer
     For chkView = 1 To viewCount
         Dim chkTexts As Object: Set chkTexts = views(chkView).Texts
-        For chkTxt = 1 To chkTexts.count
+        For chkTxt = 1 To chkTexts.Count
             On Error Resume Next
-            If chkTexts.Item(chkTxt).Leaders.count > 0 Then
+            If chkTexts.Item(chkTxt).Leaders.Count > 0 Then
                 activeDoc.Selection.Clear
                 activeDoc.Selection.Add chkTexts.Item(chkTxt)
                 Dim showState As CatVisPropertyShow
@@ -192,6 +195,16 @@ Sub CATMain()
         End If
     End If
 
+    Dim cx() As Double: ReDim cx(1 To viewCount)
+    Dim cy() As Double: ReDim cy(1 To viewCount)
+    
+    For i = 1 To viewCount
+        Dim sCalcInit(3) As Variant
+        views(i).Size sCalcInit
+        cx(i) = sCalcInit(0) + (sCalcInit(1) - sCalcInit(0)) / 2#
+        cy(i) = sCalcInit(2) + (sCalcInit(3) - sCalcInit(2)) / 2#
+    Next
+
     Dim gIdx As Integer
     If hasAnyLeaderText Then
         For gIdx = 1 To groupCount
@@ -209,11 +222,11 @@ Sub CATMain()
                 Dim vObjSetup As Object: Set vObjSetup = views(i)
                 Dim textsSetup As Object: Set textsSetup = vObjSetup.Texts
                 Dim txtIdx As Integer
-                For txtIdx = 1 To textsSetup.count
+                For txtIdx = 1 To textsSetup.Count
                     Dim txtAlign As Object: Set txtAlign = textsSetup.Item(txtIdx)
                     Dim hasLeaderAlign As Boolean: hasLeaderAlign = False
                     On Error Resume Next
-                    If txtAlign.Leaders.count > 0 Then hasLeaderAlign = True
+                    If txtAlign.Leaders.Count > 0 Then hasLeaderAlign = True
                     On Error GoTo 0
                     
                     If hasLeaderAlign Then
@@ -231,15 +244,7 @@ Sub CATMain()
         Next
     End If
 
-    Dim cx() As Double: ReDim cx(1 To viewCount)
-    Dim cy() As Double: ReDim cy(1 To viewCount)
-    
-    For i = 1 To viewCount
-        Dim sCalc(3) As Variant
-        views(i).Size sCalc
-        cx(i) = sCalc(0) + (sCalc(1) - sCalc(0)) / 2#
-        cy(i) = sCalc(2) + (sCalc(3) - sCalc(2)) / 2#
-    Next
+    ' Bounding box centers already calculated above for arrowhead snapping
 
     Dim previousRowBottomEdge As Double
     Dim previousRowRightEdge As Double
@@ -366,7 +371,7 @@ Sub AlignLeaderText(ByRef txtObj As Object, ByVal useAngle As Boolean, ByVal ang
     
     On Error Resume Next
     Dim hasLeader As Boolean
-    hasLeader = (txtObj.Leaders.count > 0)
+    hasLeader = (txtObj.Leaders.Count > 0)
     On Error GoTo 0
     
     If Not hasLeader Then Exit Sub
@@ -451,25 +456,24 @@ Sub AlignLeaderText(ByRef txtObj As Object, ByVal useAngle As Boolean, ByVal ang
     If useAngle And safeAngle = 90 Then
         If isVertText Then
             If finalY >= headY Then
-                txtObj.AnchorPosition = 4
+                txtObj.AnchorPosition = 2
             Else
-                txtObj.AnchorPosition = 6
+                txtObj.AnchorPosition = 8
             End If
         Else
             If finalY >= headY Then
-                txtObj.AnchorPosition = 8
+                txtObj.AnchorPosition = 6
             Else
-                txtObj.AnchorPosition = 2
+                txtObj.AnchorPosition = 4
             End If
         End If
     Else
         If isLeftSide Then
-            txtObj.AnchorPosition = 6
+            txtObj.AnchorPosition = 8
         Else
-            txtObj.AnchorPosition = 4
+            txtObj.AnchorPosition = 2
         End If
     End If
     On Error GoTo 0
 
 End Sub
-

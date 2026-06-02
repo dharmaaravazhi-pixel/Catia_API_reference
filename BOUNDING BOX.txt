@@ -1,0 +1,338 @@
+Dim CATIA As Object
+
+Dim GlobalMaxX As Double, GlobalMinX As Double
+Dim GlobalMaxY As Double, GlobalMinY As Double
+Dim GlobalMaxZ As Double, GlobalMinZ As Double
+
+Sub CATMain()
+    On Error Resume Next
+
+    Set CATIA = GetObject(, "CATIA.Application")
+
+    If CATIA Is Nothing Or Err.Number <> 0 Then
+        MsgBox "Could not access CATIA application.", vbCritical, "Error"
+        Exit Sub
+    End If
+
+    Err.Clear
+
+    Dim doc As Object
+    Set doc = CATIA.ActiveDocument
+
+    If doc Is Nothing Or Err.Number <> 0 Then
+        MsgBox "Could not access active document.", vbCritical, "Error"
+        Exit Sub
+    End If
+
+    On Error GoTo 0
+
+    Dim isPart As Boolean
+
+    Select Case TypeName(doc)
+        Case "PartDocument"
+            isPart = True
+
+        Case "ProductDocument"
+            isPart = False
+
+        Case Else
+            MsgBox "This macro must be run in a CATPart or CATProduct document.", vbCritical, "Wrong Document"
+            Exit Sub
+    End Select
+
+    Dim sel As Object
+    Set sel = doc.Selection
+    sel.Clear
+
+    Dim filterArray() As Variant
+
+    If isPart Then
+        ReDim filterArray(1)
+        filterArray(0) = "Body"
+        filterArray(1) = "HybridBody"
+    Else
+        ReDim filterArray(0)
+        filterArray(0) = "Product"
+    End If
+
+    Dim Status As String
+    Status = sel.SelectElement2(filterArray, "Select item to measure...", False)
+
+    If Status = "Cancel" Then Exit Sub
+
+    Dim selectedItem As Object
+    Set selectedItem = sel.Item(1).Value
+
+    sel.Clear
+
+    If isPart Then
+
+        Dim lMinX As Double, lMaxX As Double
+        Dim lMinY As Double, lMaxY As Double
+        Dim lMinZ As Double, lMaxZ As Double
+
+        If GetLocalBBox(doc.Part, selectedItem, lMinX, lMaxX, lMinY, lMaxY, lMinZ, lMaxZ) Then
+            DisplayResult doc.Product.PartNumber, lMinX, lMaxX, lMinY, lMaxY, lMinZ, lMaxZ
+        Else
+            MsgBox "Failed to measure selected body.", vbExclamation, "Error"
+        End If
+
+    Else
+
+        GlobalMaxX = -99999999
+        GlobalMinX = 99999999
+        GlobalMaxY = -99999999
+        GlobalMinY = 99999999
+        GlobalMaxZ = -99999999
+        GlobalMinZ = 99999999
+
+        ProcessProduct selectedItem
+
+        If GlobalMaxX <> -99999999 Then
+            DisplayResult selectedItem.PartNumber, GlobalMinX, GlobalMaxX, GlobalMinY, GlobalMaxY, GlobalMinZ, GlobalMaxZ
+        Else
+            MsgBox "Failed to measure assembly. Check for empty parts or unloaded components.", vbExclamation, "Error"
+        End If
+    End If
+End Sub
+
+Sub ProcessProduct(oProd As Object)
+    On Error Resume Next
+
+    If oProd.Products.count > 0 Then
+        Dim child As Object
+
+        For Each child In oProd.Products
+            ProcessProduct child
+        Next
+
+    Else
+        Dim matrix(11) As Variant
+        Err.Clear
+        oProd.Position.GetComponents matrix
+
+        If Err.Number <> 0 Then
+            Err.Clear
+            Exit Sub
+        End If
+
+        Dim oPart As Object
+        Set oPart = oProd.ReferenceProduct.Parent.Part
+
+        If oPart Is Nothing Or Err.Number <> 0 Then
+            Err.Clear
+            Exit Sub
+        End If
+
+        Dim targetBody As Object
+        Set targetBody = oPart.MainBody
+
+        If targetBody Is Nothing Or Err.Number <> 0 Then
+            Err.Clear
+            Exit Sub
+        End If
+
+        On Error GoTo 0
+
+        Dim lMinX As Double, lMaxX As Double
+        Dim lMinY As Double, lMaxY As Double
+        Dim lMinZ As Double, lMaxZ As Double
+
+        If GetLocalBBox(oPart, targetBody, lMinX, lMaxX, lMinY, lMaxY, lMinZ, lMaxZ) Then
+            Dim corners(7, 2) As Double
+
+            corners(0, 0) = lMinX: corners(0, 1) = lMinY: corners(0, 2) = lMinZ
+            corners(1, 0) = lMaxX: corners(1, 1) = lMinY: corners(1, 2) = lMinZ
+            corners(2, 0) = lMinX: corners(2, 1) = lMaxY: corners(2, 2) = lMinZ
+            corners(3, 0) = lMaxX: corners(3, 1) = lMaxY: corners(3, 2) = lMinZ
+            corners(4, 0) = lMinX: corners(4, 1) = lMinY: corners(4, 2) = lMaxZ
+            corners(5, 0) = lMaxX: corners(5, 1) = lMinY: corners(5, 2) = lMaxZ
+            corners(6, 0) = lMinX: corners(6, 1) = lMaxY: corners(6, 2) = lMaxZ
+            corners(7, 0) = lMaxX: corners(7, 1) = lMaxY: corners(7, 2) = lMaxZ
+
+            Dim i As Integer
+
+            For i = 0 To 7
+                Dim gx As Double, gy As Double, gz As Double
+
+                gx = matrix(0) * corners(i, 0) + matrix(1) * corners(i, 1) + matrix(2) * corners(i, 2) + matrix(9)
+                gy = matrix(3) * corners(i, 0) + matrix(4) * corners(i, 1) + matrix(5) * corners(i, 2) + matrix(10)
+                gz = matrix(6) * corners(i, 0) + matrix(7) * corners(i, 1) + matrix(8) * corners(i, 2) + matrix(11)
+
+                If gx > GlobalMaxX Then GlobalMaxX = gx
+                If gx < GlobalMinX Then GlobalMinX = gx
+
+                If gy > GlobalMaxY Then GlobalMaxY = gy
+                If gy < GlobalMinY Then GlobalMinY = gy
+
+                If gz > GlobalMaxZ Then GlobalMaxZ = gz
+                If gz < GlobalMinZ Then GlobalMinZ = gz
+            Next
+        End If
+    End If
+End Sub
+
+Function GetLocalBBox(oPart As Object, targetBody As Object, _
+                      ByRef mnX As Double, ByRef mxX As Double, _
+                      ByRef mnY As Double, ByRef mxY As Double, _
+                      ByRef mnZ As Double, ByRef mxZ As Double) As Boolean
+
+    On Error GoTo Failed
+
+    GetLocalBBox = False
+
+    Dim hsf As Object
+    Set hsf = oPart.HybridShapeFactory
+
+    Dim tempSet As Object
+    Set tempSet = oPart.HybridBodies.Add()
+    tempSet.Name = "__BBox_Temp__"
+
+    Dim originPt As Object
+    Set originPt = hsf.AddNewPointCoord(0, 0, 0)
+    tempSet.AppendHybridShape originPt
+
+    Dim refOrigin As Object
+    Set refOrigin = oPart.CreateReferenceFromObject(originPt)
+
+    Dim XDir As Object
+    Dim YDir As Object
+    Dim ZDir As Object
+
+    Set XDir = hsf.AddNewDirectionByCoord(1, 0, 0)
+    Set YDir = hsf.AddNewDirectionByCoord(0, 1, 0)
+    Set ZDir = hsf.AddNewDirectionByCoord(0, 0, 1)
+
+    Dim refBody As Object
+    Set refBody = oPart.CreateReferenceFromObject(targetBody)
+
+    Dim e1 As Object, e2 As Object, e3 As Object, pt As Object
+    Dim coords(2) As Variant
+
+    Dim oSPA As Object
+    Set oSPA = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
+    
+    Set e1 = hsf.AddNewExtremum(refBody, XDir, 1)
+    tempSet.AppendHybridShape e1
+    Set e2 = hsf.AddNewExtremum(oPart.CreateReferenceFromObject(e1), YDir, 1)
+    tempSet.AppendHybridShape e2
+    Set e3 = hsf.AddNewExtremum(oPart.CreateReferenceFromObject(e2), ZDir, 1)
+    tempSet.AppendHybridShape e3
+    Set pt = hsf.AddNewNear(oPart.CreateReferenceFromObject(e3), refOrigin)
+    tempSet.AppendHybridShape pt
+    oPart.UpdateObject tempSet
+    oSPA.GetMeasurable(oPart.CreateReferenceFromObject(pt)).GetPoint coords
+    mxX = coords(0)
+
+    Set e1 = hsf.AddNewExtremum(refBody, XDir, 0)
+    tempSet.AppendHybridShape e1
+    Set e2 = hsf.AddNewExtremum(oPart.CreateReferenceFromObject(e1), YDir, 0)
+    tempSet.AppendHybridShape e2
+    Set e3 = hsf.AddNewExtremum(oPart.CreateReferenceFromObject(e2), ZDir, 0)
+    tempSet.AppendHybridShape e3
+    Set pt = hsf.AddNewNear(oPart.CreateReferenceFromObject(e3), refOrigin)
+    tempSet.AppendHybridShape pt
+    oPart.UpdateObject tempSet
+    oSPA.GetMeasurable(oPart.CreateReferenceFromObject(pt)).GetPoint coords
+    mnX = coords(0)
+
+    Set e1 = hsf.AddNewExtremum(refBody, YDir, 1)
+    tempSet.AppendHybridShape e1
+    Set e2 = hsf.AddNewExtremum(oPart.CreateReferenceFromObject(e1), ZDir, 1)
+    tempSet.AppendHybridShape e2
+    Set e3 = hsf.AddNewExtremum(oPart.CreateReferenceFromObject(e2), XDir, 1)
+    tempSet.AppendHybridShape e3
+    Set pt = hsf.AddNewNear(oPart.CreateReferenceFromObject(e3), refOrigin)
+    tempSet.AppendHybridShape pt
+    oPart.UpdateObject tempSet
+    oSPA.GetMeasurable(oPart.CreateReferenceFromObject(pt)).GetPoint coords
+    mxY = coords(1)
+
+    Set e1 = hsf.AddNewExtremum(refBody, YDir, 0)
+    tempSet.AppendHybridShape e1
+    Set e2 = hsf.AddNewExtremum(oPart.CreateReferenceFromObject(e1), ZDir, 0)
+    tempSet.AppendHybridShape e2
+    Set e3 = hsf.AddNewExtremum(oPart.CreateReferenceFromObject(e2), XDir, 0)
+    tempSet.AppendHybridShape e3
+    Set pt = hsf.AddNewNear(oPart.CreateReferenceFromObject(e3), refOrigin)
+    tempSet.AppendHybridShape pt
+    oPart.UpdateObject tempSet
+    oSPA.GetMeasurable(oPart.CreateReferenceFromObject(pt)).GetPoint coords
+    mnY = coords(1)
+
+    Set e1 = hsf.AddNewExtremum(refBody, ZDir, 1)
+    tempSet.AppendHybridShape e1
+    Set e2 = hsf.AddNewExtremum(oPart.CreateReferenceFromObject(e1), XDir, 1)
+    tempSet.AppendHybridShape e2
+    Set e3 = hsf.AddNewExtremum(oPart.CreateReferenceFromObject(e2), YDir, 1)
+    tempSet.AppendHybridShape e3
+    Set pt = hsf.AddNewNear(oPart.CreateReferenceFromObject(e3), refOrigin)
+    tempSet.AppendHybridShape pt
+    oPart.UpdateObject tempSet
+    oSPA.GetMeasurable(oPart.CreateReferenceFromObject(pt)).GetPoint coords
+    mxZ = coords(2)
+
+    Set e1 = hsf.AddNewExtremum(refBody, ZDir, 0)
+    tempSet.AppendHybridShape e1
+    Set e2 = hsf.AddNewExtremum(oPart.CreateReferenceFromObject(e1), XDir, 0)
+    tempSet.AppendHybridShape e2
+    Set e3 = hsf.AddNewExtremum(oPart.CreateReferenceFromObject(e2), YDir, 0)
+    tempSet.AppendHybridShape e3
+    Set pt = hsf.AddNewNear(oPart.CreateReferenceFromObject(e3), refOrigin)
+    tempSet.AppendHybridShape pt
+    oPart.UpdateObject tempSet
+    oSPA.GetMeasurable(oPart.CreateReferenceFromObject(pt)).GetPoint coords
+    mnZ = coords(2)
+
+    Dim sel As Object
+    Set sel = CATIA.ActiveDocument.Selection
+
+    sel.Clear
+    sel.Add tempSet
+    sel.Delete
+    sel.Clear
+
+    oPart.Update
+
+    GetLocalBBox = True
+    Exit Function
+
+Failed:
+    On Error Resume Next
+
+    Dim errSel As Object
+    Set errSel = CATIA.ActiveDocument.Selection
+
+    If Not tempSet Is Nothing Then
+        errSel.Clear
+        errSel.Add tempSet
+        errSel.Delete
+        errSel.Clear
+    End If
+
+    GetLocalBBox = False
+End Function
+
+Sub DisplayResult(itemName As String, mnX As Double, mxX As Double, _
+                  mnY As Double, mxY As Double, mnZ As Double, mxZ As Double)
+
+    Dim sizeX As Double
+    Dim sizeY As Double
+    Dim sizeZ As Double
+
+    sizeX = Abs(mxX - mnX)
+    sizeY = Abs(mxY - mnY)
+    sizeZ = Abs(mxZ - mnZ)
+
+    MsgBox "BOUNDING BOX - " & itemName & vbCrLf & _
+           String(35, "-") & vbCrLf & _
+           "Size X :  " & Format(sizeX, "0.000") & " mm" & vbCrLf & _
+           "Size Y :  " & Format(sizeY, "0.000") & " mm" & vbCrLf & _
+           "Size Z :  " & Format(sizeZ, "0.000") & " mm" & vbCrLf & _
+           String(35, "-") & vbCrLf & _
+           "Min X : " & Format(mnX, "0.000") & "  |  Max X : " & Format(mxX, "0.000") & vbCrLf & _
+           "Min Y : " & Format(mnY, "0.000") & "  |  Max Y : " & Format(mxY, "0.000") & vbCrLf & _
+           "Min Z : " & Format(mnZ, "0.000") & "  |  Max Z : " & Format(mxZ, "0.000"), _
+           vbInformation, "Bounding Box Result"
+End Sub
+

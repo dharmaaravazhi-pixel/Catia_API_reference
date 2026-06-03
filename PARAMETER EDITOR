@@ -1,0 +1,833 @@
+Option Explicit
+
+Private gbCancelled As Boolean
+
+Sub CATMain()
+
+    EditParameters
+
+End Sub
+
+Function ResolveLinkedModelFromDrawing(drwDoc As Object) As Object
+    Set ResolveLinkedModelFromDrawing = Nothing
+    On Error Resume Next
+    Dim i As Integer, j As Integer
+    For i = 1 To drwDoc.Sheets.count
+        For j = 1 To drwDoc.Sheets.Item(i).views.count
+            Dim v As Object
+            Set v = drwDoc.Sheets.Item(i).views.Item(j)
+            
+            Dim gb As Object
+            Set gb = Nothing
+            Set gb = v.GenerativeBehavior
+            
+            If Not gb Is Nothing Then
+                Dim linkObj As Object
+                Set linkObj = Nothing
+                Set linkObj = gb.Document
+                
+                If Not linkObj Is Nothing Then
+                    Dim linkDoc As Document
+                    Set linkDoc = ResolveLinkedDocument(linkObj)
+                    If Not linkDoc Is Nothing Then
+                        Set ResolveLinkedModelFromDrawing = linkDoc
+                        Exit Function
+                    End If
+                End If
+            End If
+        Next j
+    Next i
+    On Error GoTo 0
+End Function
+
+
+
+
+Sub EditParameters()
+
+    gbCancelled = False
+
+    Dim myCatia As Object
+    On Error Resume Next
+    Set myCatia = CATIA
+    If myCatia Is Nothing Then
+        Set myCatia = GetObject(, "CATIA.Application")
+    End If
+    On Error GoTo 0
+
+    If myCatia Is Nothing Then
+        MsgBox "Critical Error: Cannot connect to the CATIA application engine.", vbCritical, "COM Disconnected"
+        Exit Sub
+    End If
+
+    Dim activeDoc As Document
+    Dim errNum As Long
+    Dim errDesc As String
+    
+    On Error Resume Next
+    Set activeDoc = myCatia.ActiveDocument
+    If activeDoc Is Nothing Then
+        Set activeDoc = myCatia.ActiveWindow.Document
+    End If
+    errNum = Err.Number
+    errDesc = Err.Description
+    On Error GoTo 0
+
+    Dim targetDrawing As Document
+    Dim targetModel As Document
+    
+    If activeDoc Is Nothing Then
+        MsgBox "CATIA refused to return the active document." & vbCrLf & vbCrLf & _
+               "Error Code: " & errNum & vbCrLf & _
+               "Description: " & errDesc & vbCrLf & vbCrLf & _
+               "COM Interface is rejecting calls. Please restart CATIA if this persists.", vbCritical, "COM Rejection"
+        Exit Sub
+    End If
+    
+    Dim specificDrawingView As Object
+    Set specificDrawingView = Nothing
+    
+    Dim resp As Integer
+    
+    If TypeName(activeDoc) = "DrawingDocument" Then
+        Set targetDrawing = activeDoc
+        
+        Dim wholeDrawingChoice As Integer
+        wholeDrawingChoice = MsgBox("Do you want to work with the whole drawing?" & vbCrLf & vbCrLf & "Click 'Yes' to update all views." & vbCrLf & "Click 'No' to select and update a specific view only.", vbYesNoCancel + vbQuestion, "Drawing Scope")
+        
+        If wholeDrawingChoice = vbCancel Then Exit Sub
+        
+        If wholeDrawingChoice = vbYes Then
+            Set targetModel = ResolveLinkedModelFromDrawing(activeDoc)
+        Else
+            MsgBox "Please click on the specific View you want to work with.", vbInformation, "Select View"
+            Dim sViewInputType(0)
+            sViewInputType(0) = "DrawingView"
+            
+            Dim sVSel As Object
+            Set sVSel = targetDrawing.Selection
+            sVSel.Clear
+            
+            Dim sVStatus As String
+            sVStatus = sVSel.SelectElement2(sViewInputType, "Select a Drawing View", False)
+            
+            If sVStatus <> "Cancel" And sVStatus <> "Undo" And sVStatus <> "Redo" Then
+                Set specificDrawingView = sVSel.Item2(1).Value
+                
+                Dim gb As Object
+                Set gb = specificDrawingView.GenerativeBehavior
+                If Not gb Is Nothing Then
+                    Dim linkObj As Object
+                    Set linkObj = Nothing
+                    On Error Resume Next
+                    Set linkObj = gb.Document
+                    On Error GoTo 0
+                    
+                    If Not linkObj Is Nothing Then
+                        Set targetModel = ResolveLinkedDocument(linkObj)
+                    End If
+                End If
+            Else
+                MsgBox "Operation cancelled.", vbInformation, "Aborted"
+                sVSel.Clear
+                Exit Sub
+            End If
+            sVSel.Clear
+        End If
+        
+        If targetModel Is Nothing Then
+            resp = MsgBox("Could not auto-detect a linked 3D model." & vbCrLf & vbCrLf & "Would you like to select the Model manually?", vbYesNoCancel + vbExclamation, "Link Not Found")
+            If resp = vbNo Or resp = vbCancel Then Exit Sub
+        Else
+            resp = MsgBox("DRAWING DETECTED: " & targetDrawing.Name & vbCrLf & _
+                          "LINKED MODEL: " & targetModel.Name & vbCrLf & vbCrLf & _
+                          "Lock this Drawing to this Model and proceed?", vbYesNoCancel + vbQuestion, "Confirm Lock")
+            If resp = vbCancel Then Exit Sub
+        End If
+                      
+        If resp = vbNo Or targetModel Is Nothing Then
+            MsgBox "Please activate a 3D window, then click on the Part or Product in the specification tree that you want to lock this drawing to.", vbInformation, "Manual Override"
+            
+            Dim InputType(1)
+            InputType(0) = "Part"
+            InputType(1) = "Product"
+            
+            Dim selObj As Object
+            Set selObj = targetDrawing.Selection
+            selObj.Clear
+            
+            Dim selStatus As String
+            Dim selDoc As Object
+            
+            selStatus = selObj.SelectElement4(InputType, "Select and activate a 3D model", "Select a Part or a Product", False, selDoc)
+            
+            If selStatus = "Cancel" Or selStatus = "Undo" Or selStatus = "Redo" Then
+                MsgBox "Operation cancelled.", vbInformation, "Aborted"
+                selObj.Clear
+                Exit Sub
+            End If
+            
+            If Not selDoc Is Nothing Then
+                Set targetModel = selDoc
+                
+                ' Repair broken link if a specific view was chosen
+                If Not specificDrawingView Is Nothing Then
+                    On Error Resume Next
+                    Dim fixLinks As Object
+                    Set fixLinks = specificDrawingView.GenerativeLinks
+                    fixLinks.RemoveAllLinks
+                    fixLinks.AddLink targetModel
+                    On Error GoTo 0
+                End If
+                
+                MsgBox "Manually Locked:" & vbCrLf & "Drawing: " & targetDrawing.Name & vbCrLf & "Model: " & targetModel.Name, vbInformation, "Lock Confirmed"
+            Else
+                MsgBox "Failed to retrieve the selected document.", vbExclamation
+                selObj.Clear
+                Exit Sub
+            End If
+            
+            selObj.Clear
+        End If
+        
+    ElseIf TypeName(activeDoc) = "PartDocument" Or TypeName(activeDoc) = "ProductDocument" Then
+        Set targetModel = activeDoc
+        Set targetDrawing = Nothing
+        
+        resp = MsgBox("ACTIVE 3D WINDOW: " & activeDoc.Name & vbCrLf & vbCrLf & _
+                      "Proceed with parameter editing?", vbYesNoCancel + vbQuestion, "Confirm Model")
+                      
+        If resp = vbNo Or resp = vbCancel Then
+            MsgBox "Operation cancelled. Please activate the correct window and run again.", vbInformation, "Aborted"
+            Exit Sub
+        End If
+        
+    Else
+        MsgBox "The active document (" & TypeName(activeDoc) & ") is not a Drawing, Part, or Product.", vbExclamation, "Invalid Document"
+        Exit Sub
+    End If
+
+    ' --- Execution Phase ---
+    If Not targetModel Is Nothing Then
+        If TypeName(targetModel) = "PartDocument" Then
+            CollectAndEditPart targetModel.Part
+            If Not gbCancelled Then
+                On Error Resume Next
+                targetModel.Part.Update
+                If Err.Number <> 0 Then
+                    MsgBox "Part updated with warnings. Some features may have failed to build.", vbExclamation
+                    Err.Clear
+                Else
+                    MsgBox "Part parameters updated successfully.", vbInformation
+                End If
+                On Error GoTo 0
+            End If
+        ElseIf TypeName(targetModel) = "ProductDocument" Then
+            WalkProduct targetModel.Product
+            If Not gbCancelled Then
+                On Error Resume Next
+                UpdatePartsInAssembly targetModel.Product
+                targetModel.Product.Update
+                If Err.Number <> 0 Then
+                    MsgBox "Assembly updated with warnings. Some parts may have failed to build.", vbExclamation
+                    Err.Clear
+                Else
+                    MsgBox "Assembly parameters updated successfully.", vbInformation
+                End If
+                On Error GoTo 0
+                
+                Dim scenePrompt As String
+                scenePrompt = InputBox("Do you want to create a Scene to capture this new configuration?" & vbCrLf & vbCrLf & "Enter a name for the Scene (or leave blank to skip):", "Create Scene", "Config_" & Replace(Date, "/", "-"))
+                
+                If Trim(scenePrompt) <> "" Then
+                    Dim finalName As String
+                    Dim sChoice As Integer
+                    If CheckSceneExists(targetModel, Trim(scenePrompt), finalName, sChoice) Then
+                        If sChoice <> vbCancel Then
+                            Dim newSc As Object
+                            Set newSc = CreateSceneFromCurrentState(targetModel, Trim(scenePrompt), finalName, sChoice)
+                            If Not newSc Is Nothing Then
+                                MsgBox "Scene '" & newSc.Name & "' captured successfully.", vbInformation
+                                
+                                ' Prompt to link to drawing view
+                                If Not targetDrawing Is Nothing Then
+                                    If Not specificDrawingView Is Nothing Then
+                                        Dim linkResp1 As Integer
+                                        linkResp1 = MsgBox("Do you want to link this newly created Scene to your selected Drawing View ('" & specificDrawingView.Name & "')?", vbYesNoCancel + vbQuestion, "Link Scene to View")
+                                        If linkResp1 = vbYes Then
+                                            Dim vLinks1 As Object
+                                            Set vLinks1 = specificDrawingView.GenerativeLinks
+                                            vLinks1.RemoveAllLinks
+                                            vLinks1.AddLink newSc
+                                            specificDrawingView.GenerativeBehavior.ForceUpdate
+                                            MsgBox "Scene successfully linked to the selected view!", vbInformation
+                                        End If
+                                    Else
+                                        Dim linkResp2 As Integer
+                                        linkResp2 = MsgBox("Do you want to link this newly created Scene to a Drawing View?", vbYesNoCancel + vbQuestion, "Link Scene to View")
+                                        If linkResp2 = vbYes Then
+                                            MsgBox "Please activate your Drawing window and click on the specific View you want to link to this Scene.", vbInformation, "Select View"
+                                            
+                                            Dim ViewInputType(0)
+                                            ViewInputType(0) = "DrawingView"
+                                            
+                                            Dim vSel As Object
+                                            Set vSel = targetDrawing.Selection
+                                            vSel.Clear
+                                            
+                                            Dim vStatus As String
+                                            vStatus = vSel.SelectElement2(ViewInputType, "Select the Drawing View to relink", False)
+                                            
+                                            If vStatus <> "Cancel" And vStatus <> "Undo" And vStatus <> "Redo" Then
+                                                Dim selView As Object
+                                                Set selView = vSel.Item2(1).Value
+                                                
+                                                Dim vLinks As Object
+                                                Set vLinks = selView.GenerativeLinks
+                                                vLinks.RemoveAllLinks
+                                                vLinks.AddLink newSc
+                                                
+                                                ' Force update the view to reflect the scene geometry
+                                                selView.GenerativeBehavior.ForceUpdate
+                                                MsgBox "Scene successfully linked to the selected view!", vbInformation
+                                            Else
+                                                MsgBox "View linking cancelled.", vbInformation
+                                            End If
+                                            
+                                            vSel.Clear
+                                        End If
+                                    End If
+                                End If
+                            End If
+                        End If
+                    End If
+                End If
+            End If
+        End If
+        
+        If Not targetDrawing Is Nothing And Not gbCancelled Then
+            On Error Resume Next
+            If Not specificDrawingView Is Nothing Then
+                specificDrawingView.GenerativeBehavior.ForceUpdate
+                If Err.Number <> 0 Then
+                    MsgBox "View updated with warnings.", vbExclamation
+                    Err.Clear
+                Else
+                    MsgBox "Specific View (" & specificDrawingView.Name & ") updated successfully.", vbInformation
+                End If
+            Else
+                ForceUpdateAllViews targetDrawing.Sheets.ActiveSheet
+                targetDrawing.Update
+                If Err.Number <> 0 Then
+                    MsgBox "Drawing updated with warnings.", vbExclamation
+                    Err.Clear
+                Else
+                    MsgBox "Locked Drawing (" & targetDrawing.Name & ") updated successfully.", vbInformation
+                End If
+            End If
+            On Error GoTo 0
+        End If
+    End If
+
+End Sub
+
+Sub HandleDrawingDocument(drwDoc As DrawingDocument)
+
+    Dim drwSheet As DrawingSheet
+    Set drwSheet = drwDoc.Sheets.ActiveSheet
+
+    Dim drwView As DrawingView
+    Dim i As Integer
+    Dim bFound As Boolean
+
+    bFound = False
+
+    For i = 1 To drwSheet.views.count
+
+        Set drwView = drwSheet.views.Item(i)
+
+        If drwView.IsGenerative Then
+
+            bFound = True
+
+            Exit For
+
+        End If
+
+    Next i
+
+    If Not bFound Then
+
+        MsgBox "No generative view found."
+
+        Exit Sub
+
+    End If
+
+    Dim viewLinks As DrawingViewGenerativeLinks
+    Set viewLinks = drwView.GenerativeLinks
+
+    Dim linkedObj As AnyObject
+    Set linkedObj = viewLinks.FirstLink()
+
+    If linkedObj Is Nothing Then
+
+        MsgBox "No linked model found."
+
+        Exit Sub
+
+    End If
+
+    Dim linkedDoc As Document
+    Set linkedDoc = ResolveLinkedDocument(linkedObj)
+
+    If linkedDoc Is Nothing Then
+
+        MsgBox "Unable to resolve linked document."
+
+        Exit Sub
+
+    End If
+
+    Select Case TypeName(linkedDoc)
+
+        Case "PartDocument"
+
+            Dim lPartDoc As PartDocument
+            Set lPartDoc = linkedDoc
+
+            CollectAndEditPart lPartDoc.Part
+
+            If Not gbCancelled Then
+
+                lPartDoc.Part.Update
+
+                ForceUpdateAllViews drwSheet
+
+                drwDoc.Update
+
+                drwDoc.Activate
+
+                CATIA.ActiveWindow.ActiveViewer.Update
+
+                MsgBox "Part parameters updated successfully."
+
+            End If
+
+        Case "ProductDocument"
+
+            Dim prodDoc As ProductDocument
+            Set prodDoc = linkedDoc
+
+            ForceDesignMode prodDoc.Product
+
+            WalkProduct prodDoc.Product
+
+            If Not gbCancelled Then
+
+                CATIA.RefreshDisplay = False
+
+                UpdatePartsInAssembly prodDoc.Product
+
+                prodDoc.Product.Update
+
+                CATIA.RefreshDisplay = True
+
+                DoEvents
+
+                prodDoc.Product.Update
+
+                prodDoc.Activate
+
+                CATIA.ActiveWindow.ActiveViewer.Reframe
+
+                DoEvents
+
+                drwSheet.ForceUpdate
+
+                ForceUpdateAllViews drwSheet
+
+                drwDoc.Update
+
+                drwDoc.Activate
+
+                CATIA.ActiveWindow.ActiveViewer.Update
+
+                MsgBox "Assembly parameters updated successfully."
+
+            End If
+
+        Case Else
+
+            MsgBox "Unsupported linked document type: " & TypeName(linkedDoc)
+
+    End Select
+
+End Sub
+
+Function ResolveLinkedDocument(ByVal obj As Object) As Object
+    On Error Resume Next
+    Set ResolveLinkedDocument = Nothing
+    
+    Dim currObj As Object
+    Set currObj = obj
+    
+    Dim iterCount As Integer
+    iterCount = 0
+    
+    ' Walk up the parent tree until we hit a Document or run out of parents
+    Do While Not currObj Is Nothing And iterCount < 10
+        Dim tName As String
+        tName = TypeName(currObj)
+        
+        If tName = "PartDocument" Or tName = "ProductDocument" Then
+            Set ResolveLinkedDocument = currObj
+            Exit Function
+        End If
+        
+        Set currObj = currObj.Parent
+        iterCount = iterCount + 1
+    Loop
+    
+    ' Fallback to ReferenceProduct logic for older instances
+    Dim prod As Object
+    Set prod = obj
+    If Not prod Is Nothing Then
+        Dim refDoc As Object
+        Set refDoc = prod.ReferenceProduct.Parent
+        If TypeName(refDoc) = "PartDocument" Or TypeName(refDoc) = "ProductDocument" Then
+            Set ResolveLinkedDocument = refDoc
+        End If
+    End If
+    On Error GoTo 0
+End Function
+
+Sub ForceDesignMode(prod As Product)
+
+    On Error Resume Next
+
+    prod.ApplyWorkMode DESIGN_MODE
+
+    On Error GoTo 0
+
+End Sub
+
+Sub ForceUpdateAllViews(drwSheet As DrawingSheet)
+
+    Dim v As DrawingView
+    Dim i As Integer
+
+    For i = 1 To drwSheet.views.count
+
+        Set v = drwSheet.views.Item(i)
+
+        If v.IsGenerative Then
+
+            v.Activate
+
+            DoEvents
+
+            On Error Resume Next
+            v.GenerativeBehavior.ForceUpdate
+            If Err.Number <> 0 Then Err.Clear
+            On Error GoTo 0
+
+            DoEvents
+
+        End If
+
+    Next i
+
+End Sub
+
+Sub WalkProduct(prod As Product)
+
+    If gbCancelled Then Exit Sub
+
+    ForceDesignMode prod
+
+    CollectAndEditProductParameters prod
+
+    If gbCancelled Then Exit Sub
+
+    Dim childProd As Product
+
+    For Each childProd In prod.Products
+
+        ForceDesignMode childProd
+
+        If gbCancelled Then Exit Sub
+
+        If childProd.Products.count > 0 Then
+
+            WalkProduct childProd
+
+        Else
+
+            Dim refDoc As Document
+            Set refDoc = ResolveLinkedDocument(childProd.ReferenceProduct)
+
+            If Not refDoc Is Nothing Then
+
+                If TypeName(refDoc) = "PartDocument" Then
+
+                    Dim pDoc As PartDocument
+                    Set pDoc = refDoc
+
+                    CollectAndEditPart pDoc.Part
+
+                End If
+
+            End If
+
+        End If
+
+    Next childProd
+
+End Sub
+
+Sub UpdatePartsInAssembly(prod As Product)
+
+    Dim child As Product
+
+    For Each child In prod.Products
+
+        ForceDesignMode child
+
+        If child.Products.count > 0 Then
+
+            UpdatePartsInAssembly child
+
+        Else
+
+            Dim refDoc As Document
+            Set refDoc = ResolveLinkedDocument(child.ReferenceProduct)
+
+            If Not refDoc Is Nothing Then
+
+                If TypeName(refDoc) = "PartDocument" Then
+
+                    Dim pDoc As PartDocument
+                    Set pDoc = refDoc
+
+                    On Error Resume Next
+                    pDoc.Part.Update
+                    If Err.Number <> 0 Then Err.Clear
+                    On Error GoTo 0
+
+                End If
+
+            End If
+
+        End If
+
+    Next child
+
+End Sub
+
+Sub CollectAndEditProductParameters(prod As Product)
+
+    If gbCancelled Then Exit Sub
+
+    On Error Resume Next
+    Dim userParams As Parameters
+    Set userParams = prod.Parameters.RootParameterSet.DirectParameters
+    On Error GoTo 0
+
+    CollectAndEditParameters userParams, prod.Name
+
+End Sub
+
+Sub CollectAndEditPart(part1 As Part)
+
+    If gbCancelled Then Exit Sub
+
+    On Error Resume Next
+    Dim userParams As Parameters
+    Set userParams = part1.Parameters.RootParameterSet.DirectParameters
+    On Error GoTo 0
+
+    CollectAndEditParameters userParams, part1.Name
+
+End Sub
+
+Sub CollectAndEditParameters(userParams As Parameters, parentName As String)
+
+    If userParams Is Nothing Then Exit Sub
+
+    If userParams.count = 0 Then Exit Sub
+
+    Dim i As Integer
+    Dim prm As Parameter
+
+    For i = 1 To userParams.count
+
+        If gbCancelled Then Exit Sub
+
+        Set prm = userParams.Item(i)
+
+        Dim curVal As String
+
+        curVal = prm.ValueAsString
+
+        Dim newVal As String
+
+        newVal = InputBox( _
+            "[" & parentName & "]" & vbCrLf & _
+            "Enter new value for parameter:" & vbCrLf & vbCrLf & prm.Name, _
+            "Parameter Input", _
+            curVal)
+
+        If newVal = "" Then
+
+            gbCancelled = True
+
+            Exit Sub
+
+        End If
+
+        If newVal <> curVal Then
+
+            On Error Resume Next
+
+            Dim objPrm As Object
+            Set objPrm = prm
+
+            Select Case TypeName(prm)
+                Case "StrParam"
+                    objPrm.Value = newVal
+                Case "BoolParam"
+                    objPrm.Value = CBool(newVal)
+                Case "IntParam"
+                    objPrm.Value = CInt(newVal)
+                Case "RealParam"
+                    objPrm.Value = CDbl(newVal)
+                Case Else
+                    Dim unitStr As String
+                    unitStr = ""
+                    Dim k As Integer
+                    For k = Len(curVal) To 1 Step -1
+                        Dim ch As String
+                        ch = Mid(curVal, k, 1)
+                        If IsNumeric(ch) Or ch = "." Or ch = "," Or ch = "-" Then Exit For
+                        unitStr = ch & unitStr
+                    Next k
+                    
+                    If IsNumeric(newVal) And Trim(unitStr) <> "" Then
+                        newVal = newVal & unitStr
+                    End If
+                    
+                    prm.ValuateFromString newVal
+            End Select
+
+            If Err.Number <> 0 Then
+
+                MsgBox "Failed to update parameter: " & prm.Name & vbCrLf & "Error: " & Err.Description, vbExclamation, "Update Error"
+                Err.Clear
+
+            End If
+
+            On Error GoTo 0
+
+        End If
+
+    Next i
+
+End Sub
+
+
+
+
+Function CheckSceneExists(prodDoc As Object, sceneName As String, ByRef finalSceneName As String, ByRef sceneExistsChoice As Integer) As Boolean
+    CheckSceneExists = False
+    Dim rootProd As Object: Set rootProd = prodDoc.Product
+    Dim scenes As Object: Set scenes = rootProd.GetTechnologicalObject("ScenesCollection")
+
+    Dim i As Integer, sc As Object, sceneExists As Boolean
+    sceneExists = False
+    For i = 1 To scenes.count
+        Set sc = scenes.Item(i)
+        If Not sc Is Nothing Then
+            If StrComp(sc.Name, sceneName, vbTextCompare) = 0 Then
+                sceneExists = True
+                Exit For
+            End If
+        End If
+    Next
+
+    finalSceneName = sceneName
+    sceneExistsChoice = vbYes
+    If sceneExists Then
+        sceneExistsChoice = MsgBox("The scene '" & sceneName & "' already exists." & vbCrLf & vbCrLf & _
+                            "Click 'Yes' to OVERWRITE the existing scene." & vbCrLf & _
+                            "Click 'No' to CREATE a new scene.", vbYesNoCancel + vbQuestion, "Scene Exists")
+        If sceneExistsChoice = vbNo Then
+            finalSceneName = GetUniqueProductSceneName(scenes, sceneName)
+        ElseIf sceneExistsChoice = vbCancel Then
+            Exit Function
+        End If
+    End If
+    CheckSceneExists = True
+End Function
+
+Function CreateSceneFromCurrentState(prodDoc As Object, sceneName As String, finalSceneName As String, sceneExistsChoice As Integer) As Object
+    On Error GoTo Failed
+    Set CreateSceneFromCurrentState = Nothing
+    
+    Dim rootProd As Object: Set rootProd = prodDoc.Product
+    Dim scenes As Object: Set scenes = rootProd.GetTechnologicalObject("ScenesCollection")
+
+    If sceneExistsChoice = vbYes Then
+        Dim i As Integer, sc As Object, existingScene As Object
+        For i = 1 To scenes.count
+            Set sc = scenes.Item(i)
+            If Not sc Is Nothing Then
+                If StrComp(sc.Name, sceneName, vbTextCompare) = 0 Then
+                    Set existingScene = sc
+                    Exit For
+                End If
+            End If
+        Next
+        If Not existingScene Is Nothing Then
+            scenes.Remove existingScene
+        End If
+    End If
+
+    Dim prodArray(0) As Variant
+    Set prodArray(0) = rootProd
+    Dim newScene As Object
+    Set newScene = scenes.AddProductSceneFull(finalSceneName, prodArray)
+    Set CreateSceneFromCurrentState = newScene
+    Exit Function
+Failed:
+    MsgBox "Failed to create scene.", vbCritical
+End Function
+
+Function GetUniqueProductSceneName(scenes As Object, baseName As String) As String
+    Dim candidate As String, suffix As Integer
+    candidate = baseName: suffix = 2
+    Do While ProductSceneNameExists(scenes, candidate)
+        candidate = baseName & "_" & CStr(suffix)
+        suffix = suffix + 1
+    Loop
+    GetUniqueProductSceneName = candidate
+End Function
+
+Function ProductSceneNameExists(scenes As Object, sceneName As String) As Boolean
+    On Error Resume Next
+    ProductSceneNameExists = False
+    Dim i As Integer, sc As Object
+    For i = 1 To scenes.count
+        Set sc = scenes.Item(i)
+        If Err.Number = 0 And Not sc Is Nothing Then
+            If StrComp(CStr(sc.Name), sceneName, vbTextCompare) = 0 Then
+                ProductSceneNameExists = True
+                On Error GoTo 0: Exit Function
+            End If
+        End If
+        Err.Clear
+    Next
+    On Error GoTo 0
+End Function
+
+

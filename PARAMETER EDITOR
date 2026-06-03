@@ -12,10 +12,10 @@ Function ResolveLinkedModelFromDrawing(drwDoc As Object) As Object
     Set ResolveLinkedModelFromDrawing = Nothing
     On Error Resume Next
     Dim i As Integer, j As Integer
-    For i = 1 To drwDoc.Sheets.count
-        For j = 1 To drwDoc.Sheets.Item(i).views.count
+    For i = 1 To drwDoc.Sheets.Count
+        For j = 1 To drwDoc.Sheets.Item(i).Views.Count
             Dim v As Object
-            Set v = drwDoc.Sheets.Item(i).views.Item(j)
+            Set v = drwDoc.Sheets.Item(i).Views.Item(j)
             
             Dim gb As Object
             Set gb = Nothing
@@ -75,6 +75,8 @@ Sub EditParameters()
 
     Dim targetDrawing As Document
     Dim targetModel As Document
+    Dim defaultSceneName As String
+    defaultSceneName = "Config_" & Replace(Date, "/", "-")
     
     If activeDoc Is Nothing Then
         MsgBox "CATIA refused to return the active document." & vbCrLf & vbCrLf & _
@@ -124,6 +126,18 @@ Sub EditParameters()
                     On Error GoTo 0
                     
                     If Not linkObj Is Nothing Then
+                        Dim linkType As String
+                        linkType = ""
+                        On Error Resume Next
+                        linkType = TypeName(linkObj)
+                        On Error GoTo 0
+                        
+                        If InStr(1, linkType, "Scene", vbTextCompare) > 0 Then
+                            On Error Resume Next
+                            defaultSceneName = linkObj.Name
+                            On Error GoTo 0
+                        End If
+                        
                         Set targetModel = ResolveLinkedDocument(linkObj)
                     End If
                 End If
@@ -237,7 +251,7 @@ Sub EditParameters()
                 On Error GoTo 0
                 
                 Dim scenePrompt As String
-                scenePrompt = InputBox("Do you want to create a Scene to capture this new configuration?" & vbCrLf & vbCrLf & "Enter a name for the Scene (or leave blank to skip):", "Create Scene", "Config_" & Replace(Date, "/", "-"))
+                scenePrompt = InputBox("Do you want to create a Scene to capture this new configuration?" & vbCrLf & vbCrLf & "Enter a name for the Scene (or leave blank to skip):", "Create Scene", defaultSceneName)
                 
                 If Trim(scenePrompt) <> "" Then
                     Dim finalName As String
@@ -252,15 +266,33 @@ Sub EditParameters()
                                 ' Prompt to link to drawing view
                                 If Not targetDrawing Is Nothing Then
                                     If Not specificDrawingView Is Nothing Then
-                                        Dim linkResp1 As Integer
-                                        linkResp1 = MsgBox("Do you want to link this newly created Scene to your selected Drawing View ('" & specificDrawingView.Name & "')?", vbYesNoCancel + vbQuestion, "Link Scene to View")
-                                        If linkResp1 = vbYes Then
-                                            Dim vLinks1 As Object
-                                            Set vLinks1 = specificDrawingView.GenerativeLinks
-                                            vLinks1.RemoveAllLinks
-                                            vLinks1.AddLink newSc
-                                            specificDrawingView.GenerativeBehavior.ForceUpdate
-                                            MsgBox "Scene successfully linked to the selected view!", vbInformation
+                                        Dim autoLink As Boolean
+                                        autoLink = False
+                                        
+                                        ' If they updated the existing scene, auto-link it to prevent the view from breaking
+                                        If sChoice = vbYes And StrComp(newSc.Name, defaultSceneName, vbTextCompare) = 0 Then
+                                            autoLink = True
+                                        End If
+                                        
+                                        If autoLink Then
+                                            On Error Resume Next
+                                            Dim vLinksAuto As Object
+                                            Set vLinksAuto = specificDrawingView.GenerativeLinks
+                                            vLinksAuto.RemoveAllLinks
+                                            vLinksAuto.AddLink newSc
+                                            On Error GoTo 0
+                                        Else
+                                            Dim linkResp1 As Integer
+                                            linkResp1 = MsgBox("Do you want to link this newly created Scene to your selected Drawing View ('" & specificDrawingView.Name & "')?", vbYesNoCancel + vbQuestion, "Link Scene to View")
+                                            If linkResp1 = vbYes Then
+                                                On Error Resume Next
+                                                Dim vLinks1 As Object
+                                                Set vLinks1 = specificDrawingView.GenerativeLinks
+                                                vLinks1.RemoveAllLinks
+                                                vLinks1.AddLink newSc
+                                                On Error GoTo 0
+                                                MsgBox "Scene successfully linked to the selected view!", vbInformation
+                                            End If
                                         End If
                                     Else
                                         Dim linkResp2 As Integer
@@ -829,5 +861,3 @@ Function ProductSceneNameExists(scenes As Object, sceneName As String) As Boolea
     Next
     On Error GoTo 0
 End Function
-
-

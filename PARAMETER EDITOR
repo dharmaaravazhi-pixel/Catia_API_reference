@@ -106,7 +106,7 @@ Sub EditParameters()
             sViewInputType(0) = "DrawingView"
             
             Dim sVSel As Object
-            Set sVSel = targetDrawing.Selection
+            Set sVSel = targetDrawing.selection
             sVSel.Clear
             
             Dim sVStatus As String
@@ -166,7 +166,7 @@ Sub EditParameters()
             InputType(1) = "Product"
             
             Dim selObj As Object
-            Set selObj = targetDrawing.Selection
+            Set selObj = targetDrawing.selection
             selObj.Clear
             
             Dim selStatus As String
@@ -183,7 +183,6 @@ Sub EditParameters()
             If Not selDoc Is Nothing Then
                 Set targetModel = selDoc
                 
-                ' Repair broken link if a specific view was chosen
                 If Not specificDrawingView Is Nothing Then
                     On Error Resume Next
                     Dim fixLinks As Object
@@ -220,7 +219,6 @@ Sub EditParameters()
         Exit Sub
     End If
 
-    ' --- Execution Phase ---
     If Not targetModel Is Nothing Then
         If TypeName(targetModel) = "PartDocument" Then
             CollectAndEditPart targetModel.Part
@@ -270,13 +268,11 @@ Sub EditParameters()
                             If Not newSc Is Nothing Then
                                 MsgBox "Scene '" & newSc.Name & "' captured successfully.", vbInformation
                                 
-                                ' Prompt to link to drawing view
                                 If Not targetDrawing Is Nothing Then
                                     If Not specificDrawingView Is Nothing Then
                                         Dim autoLink As Boolean
                                         autoLink = False
                                         
-                                        ' If they updated the existing scene, auto-link it to prevent the view from breaking
                                         If sChoice = vbYes And StrComp(newSc.Name, defaultSceneName, vbTextCompare) = 0 Then
                                             autoLink = True
                                         End If
@@ -311,7 +307,7 @@ Sub EditParameters()
                                             ViewInputType(0) = "DrawingView"
                                             
                                             Dim vSel As Object
-                                            Set vSel = targetDrawing.Selection
+                                            Set vSel = targetDrawing.selection
                                             vSel.Clear
                                             
                                             Dim vStatus As String
@@ -325,8 +321,7 @@ Sub EditParameters()
                                                 Set vLinks = selView.GenerativeLinks
                                                 vLinks.RemoveAllLinks
                                                 vLinks.AddLink newSc
-                                                
-                                                ' Force update the view to reflect the scene geometry
+                                                                                    
                                                 selView.GenerativeBehavior.ForceUpdate
                                                 MsgBox "Scene successfully linked to the selected view!", vbInformation
                                             Else
@@ -514,7 +509,6 @@ Function ResolveLinkedDocument(ByVal obj As Object) As Object
     Dim iterCount As Integer
     iterCount = 0
     
-    ' Walk up the parent tree until we hit a Document or run out of parents
     Do While Not currObj Is Nothing And iterCount < 10
         Dim tName As String
         tName = TypeName(currObj)
@@ -528,7 +522,6 @@ Function ResolveLinkedDocument(ByVal obj As Object) As Object
         iterCount = iterCount + 1
     Loop
     
-    ' Fallback to ReferenceProduct logic for older instances
     Dim prod As Object
     Set prod = obj
     If Not prod Is Nothing Then
@@ -710,16 +703,34 @@ Sub CollectAndEditParameters(userParams As Parameters, parentName As String)
         If Not IsCompanyParameter(prm.Name) Then
 
             Dim curVal As String
-
             curVal = prm.ValueAsString
 
-            Dim newVal As String
+            Dim unitStr As String
+            unitStr = ""
+            Dim k As Integer
+            For k = Len(curVal) To 1 Step -1
+                Dim ch As String
+                ch = Mid(curVal, k, 1)
+                If IsNumeric(ch) Or ch = "." Or ch = "," Or ch = "-" Then Exit For
+                unitStr = ch & unitStr
+            Next k
+            
+            Dim curValNoUnit As String
+            If Len(unitStr) > 0 Then
+                curValNoUnit = Trim(Left(curVal, Len(curVal) - Len(unitStr)))
+            Else
+                curValNoUnit = curVal
+            End If
 
-            newVal = InputBox( _
-                "[" & parentName & "]" & vbCrLf & _
-                "Enter new value for parameter:" & vbCrLf & vbCrLf & prm.Name, _
-                "Parameter Input", _
-                curVal)
+            Dim promptMsg As String
+            promptMsg = "[" & parentName & "]" & vbCrLf & "Enter new value for parameter"
+            If Trim(unitStr) <> "" Then
+                promptMsg = promptMsg & " (" & Trim(unitStr) & ")"
+            End If
+            promptMsg = promptMsg & ":" & vbCrLf & vbCrLf & prm.Name
+
+            Dim newVal As String
+            newVal = InputBox(promptMsg, "Parameter Input", curValNoUnit)
 
             If newVal = "" Then
 
@@ -742,19 +753,25 @@ Sub CollectAndEditParameters(userParams As Parameters, parentName As String)
                     Case "BoolParam"
                         objPrm.Value = CBool(newVal)
                     Case "IntParam"
-                        objPrm.Value = CInt(newVal)
+                        Dim outInt As Double
+                        If EvaluateMath(newVal, outInt) Then
+                            objPrm.Value = CInt(outInt)
+                        Else
+                            objPrm.Value = CInt(newVal)
+                        End If
                     Case "RealParam"
-                        objPrm.Value = CDbl(newVal)
+                        Dim outReal As Double
+                        If EvaluateMath(newVal, outReal) Then
+                            objPrm.Value = outReal
+                        Else
+                            objPrm.Value = CDbl(newVal)
+                        End If
                     Case Else
-                        Dim unitStr As String
-                        unitStr = ""
-                        Dim k As Integer
-                        For k = Len(curVal) To 1 Step -1
-                            Dim ch As String
-                            ch = Mid(curVal, k, 1)
-                            If IsNumeric(ch) Or ch = "." Or ch = "," Or ch = "-" Then Exit For
-                            unitStr = ch & unitStr
-                        Next k
+                        Dim outDim As Double
+                        If EvaluateMath(newVal, outDim) Then
+                            newVal = CStr(outDim)
+                            newVal = Replace(newVal, ",", ".")
+                        End If
                         
                         If IsNumeric(newVal) And Trim(unitStr) <> "" Then
                             newVal = newVal & unitStr
@@ -774,7 +791,7 @@ Sub CollectAndEditParameters(userParams As Parameters, parentName As String)
 
             End If
         
-        End If ' End CompanyParameter filter
+        End If
 
     Next i
 
@@ -888,5 +905,61 @@ Function ProductSceneNameExists(scenes As Object, sceneName As String) As Boolea
         End If
         Err.Clear
     Next
+    On Error GoTo 0
+End Function
+
+Function EvaluateMath(expr As String, ByRef outVal As Double) As Boolean
+    EvaluateMath = False
+    On Error Resume Next
+    
+    Dim cleanExpr As String
+    cleanExpr = ""
+    Dim i As Integer
+    For i = 1 To Len(expr)
+        Dim c As String
+        c = Mid(expr, i, 1)
+        If IsNumeric(c) Or c = "." Or c = "," Or c = "+" Or c = "-" Or c = "*" Or c = "/" Or c = "(" Or c = ")" Then
+            If c = "," Then c = "."
+            cleanExpr = cleanExpr & c
+        End If
+    Next i
+    
+    If cleanExpr <> "" Then
+        Dim fso As Object
+        Set fso = CreateObject("Scripting.FileSystemObject")
+        Dim tempVbs As String
+        Dim tempOut As String
+        tempVbs = fso.GetSpecialFolder(2) & "\catia_math_" & Hour(Now) & Minute(Now) & Second(Now) & ".vbs"
+        tempOut = tempVbs & ".out"
+        
+        Dim f As Object
+        Set f = fso.CreateTextFile(tempVbs, True)
+        f.WriteLine "On Error Resume Next"
+        f.WriteLine "WScript.Echo Eval(""" & cleanExpr & """)"
+        f.Close
+        
+        Dim shell As Object
+        Set shell = CreateObject("WScript.Shell")
+        ' Run silently (0) and wait (True)
+        shell.Run "cmd.exe /c cscript //nologo """ & tempVbs & """ > """ & tempOut & """", 0, True
+        
+        If fso.FileExists(tempOut) Then
+            Dim f2 As Object
+            Set f2 = fso.OpenTextFile(tempOut, 1)
+            Dim resultStr As String
+            resultStr = f2.ReadAll()
+            f2.Close
+            fso.DeleteFile tempOut
+            
+            If Trim(resultStr) <> "" And IsNumeric(Trim(resultStr)) Then
+                outVal = CDbl(Trim(resultStr))
+                EvaluateMath = True
+            End If
+        End If
+        
+        If fso.FileExists(tempVbs) Then
+            fso.DeleteFile tempVbs
+        End If
+    End If
     On Error GoTo 0
 End Function

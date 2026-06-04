@@ -41,9 +41,6 @@ Function ResolveLinkedModelFromDrawing(drwDoc As Object) As Object
     On Error GoTo 0
 End Function
 
-
-
-
 Sub EditParameters()
 
     gbCancelled = False

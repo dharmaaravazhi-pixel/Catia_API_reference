@@ -1,6 +1,7 @@
 Option Explicit
 
 Private gbCancelled As Boolean
+Private GlobalUpdateErrors As String
 
 Sub CATMain()
 
@@ -12,10 +13,10 @@ Function ResolveLinkedModelFromDrawing(drwDoc As Object) As Object
     Set ResolveLinkedModelFromDrawing = Nothing
     On Error Resume Next
     Dim i As Integer, j As Integer
-    For i = 1 To drwDoc.Sheets.Count
-        For j = 1 To drwDoc.Sheets.Item(i).Views.Count
+    For i = 1 To drwDoc.Sheets.count
+        For j = 1 To drwDoc.Sheets.Item(i).views.count
             Dim v As Object
-            Set v = drwDoc.Sheets.Item(i).Views.Item(j)
+            Set v = drwDoc.Sheets.Item(i).views.Item(j)
             
             Dim gb As Object
             Set gb = Nothing
@@ -46,6 +47,7 @@ End Function
 Sub EditParameters()
 
     gbCancelled = False
+    GlobalUpdateErrors = ""
 
     Dim myCatia As Object
     On Error Resume Next
@@ -229,12 +231,16 @@ Sub EditParameters()
                 On Error Resume Next
                 targetModel.Part.Update
                 If Err.Number <> 0 Then
-                    MsgBox "Part updated with warnings. Some features may have failed to build.", vbExclamation
+                    GlobalUpdateErrors = GlobalUpdateErrors & "- " & targetModel.Name & ": " & Err.Description & vbCrLf
                     Err.Clear
+                End If
+                On Error GoTo 0
+                
+                If GlobalUpdateErrors <> "" Then
+                    MsgBox "Part updated with warnings:" & vbCrLf & vbCrLf & GlobalUpdateErrors, vbExclamation, "Update Warnings"
                 Else
                     MsgBox "Part parameters updated successfully.", vbInformation
                 End If
-                On Error GoTo 0
             End If
         ElseIf TypeName(targetModel) = "ProductDocument" Then
             WalkProduct targetModel.Product
@@ -243,12 +249,16 @@ Sub EditParameters()
                 UpdatePartsInAssembly targetModel.Product
                 targetModel.Product.Update
                 If Err.Number <> 0 Then
-                    MsgBox "Assembly updated with warnings. Some parts may have failed to build.", vbExclamation
+                    GlobalUpdateErrors = GlobalUpdateErrors & "- " & targetModel.Name & ": " & Err.Description & vbCrLf
                     Err.Clear
+                End If
+                On Error GoTo 0
+                
+                If GlobalUpdateErrors <> "" Then
+                    MsgBox "Assembly updated with warnings. The following features failed to build:" & vbCrLf & vbCrLf & GlobalUpdateErrors, vbExclamation, "Update Warnings"
                 Else
                     MsgBox "Assembly parameters updated successfully.", vbInformation
                 End If
-                On Error GoTo 0
                 
                 Dim scenePrompt As String
                 scenePrompt = InputBox("Do you want to create a Scene to capture this new configuration?" & vbCrLf & vbCrLf & "Enter a name for the Scene (or leave blank to skip):", "Create Scene", defaultSceneName)
@@ -644,7 +654,10 @@ Sub UpdatePartsInAssembly(prod As Product)
 
                     On Error Resume Next
                     pDoc.Part.Update
-                    If Err.Number <> 0 Then Err.Clear
+                    If Err.Number <> 0 Then
+                        GlobalUpdateErrors = GlobalUpdateErrors & "- " & pDoc.Name & ": " & Err.Description & vbCrLf
+                        Err.Clear
+                    End If
                     On Error GoTo 0
 
                 End If
@@ -678,7 +691,6 @@ Sub CollectAndEditPart(part1 As Part)
     Dim userParams As Parameters
     Set userParams = part1.Parameters.RootParameterSet.DirectParameters
     On Error GoTo 0
-
     CollectAndEditParameters userParams, part1.Name
 
 End Sub
@@ -697,78 +709,98 @@ Sub CollectAndEditParameters(userParams As Parameters, parentName As String)
         If gbCancelled Then Exit Sub
 
         Set prm = userParams.Item(i)
+        
+        If Not IsCompanyParameter(prm.Name) Then
 
-        Dim curVal As String
+            Dim curVal As String
 
-        curVal = prm.ValueAsString
+            curVal = prm.ValueAsString
 
-        Dim newVal As String
+            Dim newVal As String
 
-        newVal = InputBox( _
-            "[" & parentName & "]" & vbCrLf & _
-            "Enter new value for parameter:" & vbCrLf & vbCrLf & prm.Name, _
-            "Parameter Input", _
-            curVal)
+            newVal = InputBox( _
+                "[" & parentName & "]" & vbCrLf & _
+                "Enter new value for parameter:" & vbCrLf & vbCrLf & prm.Name, _
+                "Parameter Input", _
+                curVal)
 
-        If newVal = "" Then
+            If newVal = "" Then
 
-            gbCancelled = True
+                gbCancelled = True
 
-            Exit Sub
-
-        End If
-
-        If newVal <> curVal Then
-
-            On Error Resume Next
-
-            Dim objPrm As Object
-            Set objPrm = prm
-
-            Select Case TypeName(prm)
-                Case "StrParam"
-                    objPrm.Value = newVal
-                Case "BoolParam"
-                    objPrm.Value = CBool(newVal)
-                Case "IntParam"
-                    objPrm.Value = CInt(newVal)
-                Case "RealParam"
-                    objPrm.Value = CDbl(newVal)
-                Case Else
-                    Dim unitStr As String
-                    unitStr = ""
-                    Dim k As Integer
-                    For k = Len(curVal) To 1 Step -1
-                        Dim ch As String
-                        ch = Mid(curVal, k, 1)
-                        If IsNumeric(ch) Or ch = "." Or ch = "," Or ch = "-" Then Exit For
-                        unitStr = ch & unitStr
-                    Next k
-                    
-                    If IsNumeric(newVal) And Trim(unitStr) <> "" Then
-                        newVal = newVal & unitStr
-                    End If
-                    
-                    prm.ValuateFromString newVal
-            End Select
-
-            If Err.Number <> 0 Then
-
-                MsgBox "Failed to update parameter: " & prm.Name & vbCrLf & "Error: " & Err.Description, vbExclamation, "Update Error"
-                Err.Clear
+                Exit Sub
 
             End If
 
-            On Error GoTo 0
+            If newVal <> curVal Then
 
-        End If
+                On Error Resume Next
+
+                Dim objPrm As Object
+                Set objPrm = prm
+
+                Select Case TypeName(prm)
+                    Case "StrParam"
+                        objPrm.Value = newVal
+                    Case "BoolParam"
+                        objPrm.Value = CBool(newVal)
+                    Case "IntParam"
+                        objPrm.Value = CInt(newVal)
+                    Case "RealParam"
+                        objPrm.Value = CDbl(newVal)
+                    Case Else
+                        Dim unitStr As String
+                        unitStr = ""
+                        Dim k As Integer
+                        For k = Len(curVal) To 1 Step -1
+                            Dim ch As String
+                            ch = Mid(curVal, k, 1)
+                            If IsNumeric(ch) Or ch = "." Or ch = "," Or ch = "-" Then Exit For
+                            unitStr = ch & unitStr
+                        Next k
+                        
+                        If IsNumeric(newVal) And Trim(unitStr) <> "" Then
+                            newVal = newVal & unitStr
+                        End If
+                        
+                        prm.ValuateFromString newVal
+                End Select
+
+                If Err.Number <> 0 Then
+
+                    MsgBox "Failed to update parameter: " & prm.Name & vbCrLf & "Error: " & Err.Description, vbExclamation, "Update Error"
+                    Err.Clear
+
+                End If
+
+                On Error GoTo 0
+
+            End If
+        
+        End If ' End CompanyParameter filter
 
     Next i
 
 End Sub
 
-
-
+Function IsCompanyParameter(pName As String) As Boolean
+    IsCompanyParameter = False
+    Dim uName As String
+    uName = UCase(pName)
+    
+    If InStr(1, uName, "SAP", vbTextCompare) > 0 Then
+        IsCompanyParameter = True
+        Exit Function
+    End If
+    
+    If InStr(1, uName, "DISTYPE", vbTextCompare) > 0 Or _
+       InStr(1, uName, "DISNUMBER", vbTextCompare) > 0 Or _
+       InStr(1, uName, "DISPART", vbTextCompare) > 0 Or _
+       InStr(1, uName, "DISVERS", vbTextCompare) > 0 Then
+        IsCompanyParameter = True
+        Exit Function
+    End If
+End Function
 
 Function CheckSceneExists(prodDoc As Object, sceneName As String, ByRef finalSceneName As String, ByRef sceneExistsChoice As Integer) As Boolean
     CheckSceneExists = False

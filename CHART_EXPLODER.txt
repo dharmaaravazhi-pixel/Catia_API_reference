@@ -24,7 +24,7 @@ Sub CATMain()
 
     Dim sel As Object
     Set sel = activeDoc.Selection
-    If sel.Count = 0 Then
+    If sel.count = 0 Then
         MsgBox "Select products first!"
         Exit Sub
     End If
@@ -37,7 +37,7 @@ Sub CATMain()
     ReDim prods(1 To 1)
     selectedCount = 0
 
-    If sel.Count = 1 And sel.Item(1).Value.Name = activeDoc.Product.Name Then
+    If sel.count = 1 And sel.Item(1).Value.Name = activeDoc.Product.Name Then
         Dim child As Object
         For Each child In sel.Item(1).Value.Products
             selectedCount = selectedCount + 1
@@ -45,7 +45,7 @@ Sub CATMain()
             Set prods(selectedCount) = child
         Next
     Else
-        For i = 1 To sel.Count
+        For i = 1 To sel.count
             selectedCount = selectedCount + 1
             ReDim Preserve prods(1 To selectedCount)
             Set prods(selectedCount) = sel.Item(i).Value
@@ -59,98 +59,144 @@ Sub CATMain()
 
     totalParts = selectedCount
 
-    Dim inputText As String
+    Dim gap As Double
+    Dim targetWidth As Double
+    Dim explodeDir As String
+    Dim firstRowCount As Integer
+    Dim rowDir As String
+    Dim rowGap As Double
+    Dim useRows As Boolean
     Dim explodeMode As Integer
-
+    explodeMode = 1
+    
+    Dim chartMode As Integer
+    Dim inputText As String
     Do
-        inputText = InputBox("Enter explode type:" & vbCrLf & _
-                             "0 - Linear explode" & vbCrLf & _
-                             "1 - Chart explode", , "1")
+        inputText = InputBox("This macro is used to explode parts and create chart view." & vbCrLf & _
+                             "(H Mode explodes Right, V Mode explodes Downwards)" & vbCrLf & vbCrLf & _
+                             "Select Chart Layout Mode:" & vbCrLf & _
+                             "1 - Horizontal Explode" & vbCrLf & _
+                             "2 - Vertical Explode", "Chart Mode", "1")
         If inputText = "" Then Exit Sub
         If IsNumeric(inputText) Then
-            explodeMode = CInt(inputText)
-            If explodeMode = 0 Or explodeMode = 1 Then Exit Do
+            chartMode = CInt(inputText)
+            If chartMode = 1 Or chartMode = 2 Then Exit Do
         End If
-        MsgBox "Invalid explode type. Use 0 or 1.", vbExclamation, "Invalid Type"
+        MsgBox "Enter 1 or 2.", vbExclamation, "Invalid Mode"
+    Loop
+    
+    Dim spacingMode As Integer
+
+    Dim customGapsStr As String
+    Dim customGapVals() As Double
+    ReDim customGapVals(1 To totalParts)
+    
+    Do
+        inputText = InputBox("Enter spacing mode:" & vbCrLf & "1 - Equal Gap (Visual edge-to-edge)" & vbCrLf & "2 - Target Width (Center-to-Center)" & vbCrLf & "3 - Custom Gaps (Comma-separated)", "Spacing Mode", "1")
+        If inputText = "" Then Exit Sub
+        If IsNumeric(inputText) Then
+            spacingMode = CInt(inputText)
+            If spacingMode = 1 Or spacingMode = 2 Or spacingMode = 3 Then Exit Do
+        End If
+        MsgBox "Enter 1, 2, or 3.", vbExclamation, "Invalid Mode"
     Loop
 
+    If spacingMode = 1 Then
+        Do
+            inputText = InputBox("Enter visual gap between parts (mm):", "Chart Explode", "15")
+            If inputText = "" Then Exit Sub
+            If IsNumeric(inputText) Then
+                gap = CDbl(inputText)
+                Exit Do
+            End If
+            MsgBox "Gap must be a number.", vbExclamation, "Invalid Gap"
+        Loop
+    ElseIf spacingMode = 2 Then
+        Do
+            inputText = InputBox("Enter total 3D row target width (mm) (e.g. 400 for A3 at 1:1 scale):", "Chart Explode", "400")
+            If inputText = "" Then Exit Sub
+            If IsNumeric(inputText) Then
+                targetWidth = CDbl(inputText)
+                If targetWidth > 0 Then Exit Do
+            End If
+            MsgBox "Width must be > 0.", vbExclamation, "Invalid Width"
+        Loop
+    ElseIf spacingMode = 3 Then
+        Dim defGaps As String
+        defGaps = "15"
+        Dim gi As Integer
+        For gi = 2 To totalParts
+            defGaps = defGaps & ",15"
+        Next
+        Do
+            inputText = InputBox("Enter gaps separated by commas (e.g. 15,30,15). If fewer are entered, the last gap is repeated for the rest:", "Chart Explode", defGaps)
+            If inputText = "" Then Exit Sub
+            customGapsStr = inputText
+            Exit Do
+        Loop
+        
+        Dim strGaps() As String
+        strGaps = Split(Replace(customGapsStr, " ", ""), ",")
+        Dim lastGap As Double: lastGap = 15
+        Dim gIdx As Integer
+        For gIdx = 1 To totalParts
+            If gIdx - 1 <= UBound(strGaps) Then
+                If IsNumeric(strGaps(gIdx - 1)) Then
+                    lastGap = CDbl(strGaps(gIdx - 1))
+                End If
+            End If
+            customGapVals(gIdx) = lastGap
+        Next
+    End If
+
+    If chartMode = 1 Then
+        explodeDir = "Y"
+    Else
+        explodeDir = "-Z"
+    End If
+
+    Do
+        inputText = InputBox("Enter first row part count (Total parts = " & totalParts & "):", "Chart Explode", "7")
+        If inputText = "" Then Exit Sub
+        If IsNumeric(inputText) Then
+            firstRowCount = CInt(inputText)
+            If firstRowCount > 0 Then Exit Do
+        End If
+        MsgBox "First row count must be a number greater than 0.", vbExclamation, "Invalid Count"
+    Loop
+
+    If firstRowCount < totalParts Then
+        useRows = True
+        If chartMode = 1 Then
+            rowDir = "-Z"
+        Else
+            rowDir = "Y"
+        End If
+
+        Do
+            inputText = InputBox("Enter visual gap between rows (mm):", "Chart Explode", "30")
+            If inputText = "" Then Exit Sub
+            If IsNumeric(inputText) Then
+                rowGap = CDbl(inputText)
+                Exit Do
+            End If
+            MsgBox "Row gap must be a number.", vbExclamation, "Invalid Gap"
+        Loop
+    Else
+        useRows = False
+    End If
+
     Dim sceneName As String
-    If explodeMode = 0 Then sceneName = "Exploded_view" Else sceneName = "Chart_view"
+    If chartMode = 1 Then
+        sceneName = "Chart_view(H)"
+    Else
+        sceneName = "Chart_view(V)"
+    End If
     
     Dim finalSceneName As String
     Dim sceneExistsChoice As VbMsgBoxResult
     If CheckSceneExists(activeDoc, sceneName, finalSceneName, sceneExistsChoice) = False Then Exit Sub
 
-    Dim gap As Double
-    Do
-        inputText = InputBox("Enter visual gap between parts (mm):", , "15")
-        If inputText = "" Then Exit Sub
-        If IsNumeric(inputText) Then
-            gap = CDbl(inputText)
-            Exit Do
-        End If
-        MsgBox "Gap must be a number.", vbExclamation, "Invalid Gap"
-    Loop
-
-    Dim explodeDir As String
-    Do
-        inputText = InputBox("Enter explode direction (X, -X, Y, -Y, Z, -Z):", , "X")
-        If inputText = "" Then Exit Sub
-        explodeDir = UCase(inputText)
-        If IsValidDirection(explodeDir) Then Exit Do
-        MsgBox "Invalid direction. Use X, -X, Y, -Y, Z, or -Z.", vbExclamation, "Invalid Direction"
-    Loop
-
-    Dim partsPerRow As Integer
-    Dim rowDir As String
-    Dim rowGap As Double
-    Dim useRows As Boolean
-
-    If explodeMode = 1 Then
-        Do
-            inputText = InputBox("Enter first row part count:", , "7")
-            If inputText = "" Then Exit Sub
-            If IsNumeric(inputText) Then
-                partsPerRow = CInt(inputText)
-                If partsPerRow > 0 Then Exit Do
-            End If
-            MsgBox "First row count must be a number greater than 0.", vbExclamation, "Invalid Count"
-        Loop
-
-        If partsPerRow < totalParts Then
-            useRows = True
-            Do
-                inputText = InputBox("Enter next row direction (X, -X, Y, -Y, Z, -Z):", , "-Y")
-                If inputText = "" Then Exit Sub
-                rowDir = UCase(inputText)
-                If IsValidDirection(rowDir) And AxisLetter(explodeDir) <> AxisLetter(rowDir) Then Exit Do
-                If IsValidDirection(rowDir) = False Then
-                    MsgBox "Invalid row direction. Use X, -X, Y, -Y, Z, or -Z.", vbExclamation, "Invalid Direction"
-                Else
-                    MsgBox "Explode direction and row direction must use different axes.", vbExclamation, "Invalid Directions"
-                End If
-            Loop
-
-            Do
-                inputText = InputBox("Enter visual gap between rows (mm):", , "30")
-                If inputText = "" Then Exit Sub
-                If IsNumeric(inputText) Then
-                    rowGap = CDbl(inputText)
-                    Exit Do
-                End If
-                MsgBox "Row gap must be a number.", vbExclamation, "Invalid Gap"
-            Loop
-        Else
-            useRows = False
-        End If
-    Else
-        partsPerRow = totalParts
-        useRows = False
-    End If
-
-    ' =====================================================
-    ' 1. MEASURE BOUNDING BOXES USING RELATIVE PROJECTION
-    ' =====================================================
     Dim origM() As Variant: ReDim origM(1 To totalParts)
     Dim orient() As Double: ReDim orient(1 To totalParts, 0 To 8)
     
@@ -190,25 +236,60 @@ Sub CATMain()
         
         origM(validCount + 1) = m
         
-        Dim rotatePart As Boolean: rotatePart = False
-        If explodeMode = 1 Then
-            Dim searchText As String
-            On Error Resume Next
-            searchText = UCase(prod.PartNumber & " " & prod.Name & " " & prod.Nomenclature & " " & prod.Definition)
-            On Error GoTo 0
-            
-            ' Leave "VALVE PIN" horizontal, rotate everything else
-            If InStr(searchText, "VALVE PIN") = 0 Then
-                rotatePart = True
+        Dim forcedM(11) As Variant
+        For k = 0 To 11: forcedM(k) = m(k): Next
+        
+        forcedM(0) = 0: forcedM(1) = 1: forcedM(2) = 0
+        forcedM(3) = 0: forcedM(4) = 0: forcedM(5) = 1
+        forcedM(6) = 1: forcedM(7) = 0: forcedM(8) = 0
+        
+        Dim isAnchorPart As Boolean
+        isAnchorPart = False
+        If (validCount + 1) = 1 Then isAnchorPart = True
+        
+        Dim uName As String, uPartNumber As String, uDef As String, uNom As String
+        uName = UCase(prod.Name)
+        uPartNumber = "": uDef = "": uNom = ""
+        On Error Resume Next
+        uPartNumber = UCase(prod.PartNumber)
+        uDef = UCase(prod.Definition)
+        uNom = UCase(prod.Nomenclature)
+        On Error GoTo 0
+        
+        Dim fullSearchStr As String
+        fullSearchStr = " " & uName & " " & uPartNumber & " " & uDef & " " & uNom & " "
+        Dim cIdx As Integer
+        For cIdx = 1 To Len("._-0123456789")
+            fullSearchStr = Replace(fullSearchStr, Mid("._-0123456789", cIdx, 1), " ")
+        Next
+        
+        Do While InStr(fullSearchStr, "  ") > 0
+            fullSearchStr = Replace(fullSearchStr, "  ", " ")
+        Loop
+        
+        If InStr(fullSearchStr, " PISTON ROD ") > 0 Or InStr(fullSearchStr, " HOLLOW ROD ") > 0 Or _
+           InStr(fullSearchStr, " VALVE PIN ") > 0 Or InStr(fullSearchStr, " PISTON POST ") > 0 Or _
+           InStr(fullSearchStr, " ROD ") > 0 Then
+            isAnchorPart = True
+        End If
+        
+        If isAnchorPart Then
+            If chartMode = 1 Then
+         
+                forcedM(0) = 0: forcedM(1) = 0: forcedM(2) = -1
+                forcedM(3) = 1: forcedM(4) = 0: forcedM(5) = 0
+                forcedM(6) = 0: forcedM(7) = -1: forcedM(8) = 0
+            Else
+           
+                For k = 0 To 11: forcedM(k) = m(k): Next
             End If
         End If
         
-        Dim baseM(11) As Variant
-        For k = 0 To 11: baseM(k) = m(k): Next
+        prod.Position.SetComponents forcedM
+        activeDoc.Product.Update
         
-        If rotatePart Then
-            RotateMatrixGlobal baseM, "Y", 90
-        End If
+        Dim baseM(11) As Variant
+        For k = 0 To 11: baseM(k) = forcedM(k): Next
         
         Dim outMn As Double, outMx As Double
         GetRelativeProjectedExtents prod, baseM, explodeDir, outMn, outMx
@@ -249,18 +330,16 @@ NextSelectedProduct:
     End If
     totalParts = validCount
 
-    If explodeMode = 0 Then
-        partsPerRow = totalParts
-        useRows = False
-    ElseIf partsPerRow >= totalParts Then
+    If firstRowCount >= totalParts Then
         useRows = False
     End If
 
-    ' =====================================================
-    ' 2. CALCULATE LINEAR OFFSETS
-    ' =====================================================
     Dim rowCount As Integer
-    rowCount = (totalParts + partsPerRow - 1) \ partsPerRow
+    If firstRowCount >= totalParts Then
+        rowCount = 1
+    Else
+        rowCount = 2
+    End If
 
     Dim rowStartShift() As Double: ReDim rowStartShift(0 To rowCount - 1)
     Dim rowTarget() As Double: ReDim rowTarget(0 To rowCount - 1)
@@ -274,22 +353,70 @@ NextSelectedProduct:
 
     Dim firstIndex As Integer, lastIndex As Integer
     Dim visualMax As Double, maxWidth As Double: maxWidth = 0#
+    Dim firstRowInterval As Double
 
     For R = 0 To rowCount - 1
-        firstIndex = (R * partsPerRow) + 1
-        lastIndex = firstIndex + partsPerRow - 1
-        If lastIndex > totalParts Then lastIndex = totalParts
+        If R = 0 Then
+            firstIndex = 1
+            lastIndex = firstRowCount
+            If lastIndex > totalParts Then lastIndex = totalParts
+        Else
+            firstIndex = firstRowCount + 1
+            lastIndex = totalParts
+        End If
+        
+        Dim partsInThisRow As Integer
+        partsInThisRow = lastIndex - firstIndex + 1
 
         visualMax = 0#
-        For i = firstIndex To lastIndex
-            If i = firstIndex Then
-                mainOffset(i) = -minMain(i)
+        
+        If spacingMode = 1 Then
+            For i = firstIndex To lastIndex
+                If i = firstIndex Then
+                    mainOffset(i) = -minMain(i)
+                Else
+                    mainOffset(i) = visualMax + gap - minMain(i)
+                End If
+                visualMax = mainOffset(i) + maxMain(i)
+            Next
+            rowWidth(R) = visualMax
+        ElseIf spacingMode = 3 Then
+            For i = firstIndex To lastIndex
+                If i = firstIndex Then
+                    mainOffset(i) = -minMain(i)
+                Else
+                    mainOffset(i) = visualMax + customGapVals(i) - minMain(i)
+                End If
+                visualMax = mainOffset(i) + maxMain(i)
+            Next
+            rowWidth(R) = visualMax
+        Else
+            If partsInThisRow > 1 Then
+                Dim spacingInterval As Double
+                If R = 0 Then
+                    spacingInterval = targetWidth / CDbl(partsInThisRow - 1)
+                    firstRowInterval = spacingInterval
+                Else
+                    If partsInThisRow <= firstRowCount Then
+                        spacingInterval = firstRowInterval
+                    Else
+                        spacingInterval = targetWidth / CDbl(partsInThisRow - 1)
+                    End If
+                End If
+                
+                For i = firstIndex To lastIndex
+                    Dim kIndex As Integer: kIndex = i - firstIndex
+                    Dim currentCenter As Double
+                    currentCenter = (maxMain(i) + minMain(i)) / 2#
+                    mainOffset(i) = (kIndex * spacingInterval) - currentCenter
+                Next
+                rowWidth(R) = (partsInThisRow - 1) * spacingInterval
             Else
-                mainOffset(i) = visualMax + gap - minMain(i)
+                mainOffset(firstIndex) = -minMain(firstIndex)
+                rowWidth(R) = maxMain(firstIndex) - minMain(firstIndex)
             End If
-            visualMax = mainOffset(i) + maxMain(i)
-        Next
-        rowWidth(R) = visualMax
+        End If
+        
         If rowWidth(R) > maxWidth Then maxWidth = rowWidth(R)
     Next
 
@@ -297,15 +424,17 @@ NextSelectedProduct:
         rowStartShift(R) = maxWidth - rowWidth(R)
     Next
 
-    ' =====================================================
-    ' 3. CALCULATE ROW OFFSETS
-    ' =====================================================
     If useRows Then
         Dim rowVisualMax As Double
         For R = 0 To rowCount - 1
-            firstIndex = (R * partsPerRow) + 1
-            lastIndex = firstIndex + partsPerRow - 1
-            If lastIndex > totalParts Then lastIndex = totalParts
+            If R = 0 Then
+                firstIndex = 1
+                lastIndex = firstRowCount
+                If lastIndex > totalParts Then lastIndex = totalParts
+            Else
+                firstIndex = firstRowCount + 1
+                lastIndex = totalParts
+            End If
 
             Dim maxPartWidth As Double: maxPartWidth = 0#
             For i = firstIndex To lastIndex
@@ -323,10 +452,6 @@ NextSelectedProduct:
         Next
     End If
 
-    ' =====================================================
-    ' 4. APPLY POSITIONS & CAPTURE SCENE
-    ' =====================================================
-    ' Temporarily deactivate constraints to allow SetComponents to succeed on sub-assemblies!
     Dim constraints As Object
     On Error Resume Next
     Set constraints = activeDoc.Product.Connections("CATIAConstraints")
@@ -348,7 +473,11 @@ NextSelectedProduct:
         ApplyAxisOffset finalM, cross1, -(minC1(i) + maxC1(i)) / 2#, startX, startY, startZ
         ApplyAxisOffset finalM, cross2, -(minC2(i) + maxC2(i)) / 2#, startX, startY, startZ
 
-        R = (i - 1) \ partsPerRow
+        If i <= firstRowCount Then
+            R = 0
+        Else
+            R = 1
+        End If
         ApplyAxisOffset finalM, explodeDir, rowStartShift(R) + mainOffset(i), startX, startY, startZ
         If useRows Then
             ApplyAxisOffset finalM, rowDir, rowTarget(R) - (minRow(i) + maxRow(i)) / 2#, startX, startY, startZ
@@ -391,6 +520,41 @@ NextSelectedProduct:
         Else
             MsgBox "Chart explode completed." & vbCrLf & "Skipped parts: " & skippedCount, vbInformation, "Done"
         End If
+        
+        Dim linkResp As Integer
+        linkResp = MsgBox("Do you want to link this newly created Scene to a Drawing View?", vbYesNoCancel + vbQuestion, "Link Scene to View")
+        
+        If linkResp = vbYes Then
+            MsgBox "The macro will now pause." & vbCrLf & vbCrLf & "1. Use the Window menu at the top to switch to your Drawing." & vbCrLf & "2. Click on the View you want to link.", vbInformation, "Switch Window"
+            
+            Dim ViewInputType(0)
+            ViewInputType(0) = "DrawingView"
+            
+            Dim vSel As Object
+            Set vSel = CATIA.ActiveDocument.Selection
+            vSel.Clear
+            
+            Dim selDoc As Object
+            Dim vStatus As String
+            vStatus = vSel.SelectElement4(ViewInputType, "Switch to your Drawing and click on a View", "Select View", False, selDoc)
+            
+            If vStatus <> "Cancel" And vStatus <> "Undo" And vStatus <> "Redo" Then
+                Dim selView As Object
+                Set selView = selDoc.Selection.Item2(1).Value
+                
+                Dim vLinks As Object
+                Set vLinks = selView.GenerativeLinks
+                vLinks.RemoveAllLinks
+                vLinks.AddLink newScene
+                                                    
+                selView.GenerativeBehavior.ForceUpdate
+                MsgBox "Scene successfully linked to the selected view!", vbInformation
+            Else
+                MsgBox "View linking cancelled.", vbInformation
+            End If
+            vSel.Clear
+            If Not selDoc Is Nothing Then selDoc.Selection.Clear
+        End If
     End If
     Exit Sub
 
@@ -418,9 +582,6 @@ SafeFail:
     MsgBox "Macro stopped safely." & vbCrLf & "Error Number : " & errNum & vbCrLf & "Description : " & errDesc, vbExclamation, "Safe Stop"
 End Sub
 
-' =====================================================
-' MEASURES RELATIVE BOUNDING BOXES FOR SUB-ASSEMBLIES
-' =====================================================
 Sub GetRelativeProjectedExtents(oProd As Object, ByRef baseM() As Variant, axisDir As String, ByRef outMin As Double, ByRef outMax As Double)
     outMin = 99999999#
     outMax = -99999999#
@@ -431,7 +592,7 @@ Sub GetRelativeProjectedExtents(oProd As Object, ByRef baseM() As Variant, axisD
     rootM(6) = baseM(6): rootM(7) = baseM(7): rootM(8) = baseM(8)
     rootM(9) = 0#: rootM(10) = 0#: rootM(11) = 0#
     
-    If oProd.Products.Count > 0 Then
+    If oProd.Products.count > 0 Then
         Dim child As Object
         For Each child In oProd.Products
             RecursiveGetRelative child, rootM, axisDir, outMin, outMax, False
@@ -462,7 +623,7 @@ Sub RecursiveGetRelative(oItem As Object, ByRef parentM() As Variant, axisDir As
         MultiplyMatricesCATIA parentM, itemLocalM, itemGlobalM
     End If
     
-    If oItem.Products.Count > 0 Then
+    If oItem.Products.count > 0 Then
         Dim child As Object
         For Each child In oItem.Products
             RecursiveGetRelative child, itemGlobalM, axisDir, outMin, outMax, False
@@ -506,9 +667,6 @@ Sub RecursiveGetRelative(oItem As Object, ByRef parentM() As Variant, axisDir As
     End If
 End Sub
 
-' =====================================================
-' ROTATE TRANSFORMATION MATRIX (GLOBAL AXES)
-' =====================================================
 Sub RotateMatrixGlobal(ByRef matrix() As Variant, ByVal axis As String, ByVal angleDeg As Double)
     Dim rad As Double, pi As Double
     pi = 4 * Atn(1)
@@ -690,9 +848,6 @@ Failed:
     TryMeasureBody = False
 End Function
 
-' =====================================================
-' SCENE & HELPER FUNCTIONS
-' =====================================================
 Sub GetCrossAxes(ByVal mainDir As String, ByRef c1 As String, ByRef c2 As String)
     Dim m As String: m = UCase(Right(mainDir, 1))
     If m = "X" Then
@@ -711,7 +866,7 @@ Function CheckSceneExists(prodDoc As Object, sceneName As String, ByRef finalSce
 
     Dim i As Integer, sc As Object, sceneExists As Boolean
     sceneExists = False
-    For i = 1 To scenes.Count
+    For i = 1 To scenes.count
         Set sc = scenes.Item(i)
         If Not sc Is Nothing Then
             If StrComp(sc.Name, sceneName, vbTextCompare) = 0 Then
@@ -745,7 +900,7 @@ Function CreateSceneFromCurrentState(prodDoc As Object, sceneName As String, fin
 
     If sceneExistsChoice = vbYes Then
         Dim i As Integer, sc As Object, existingScene As Object
-        For i = 1 To scenes.Count
+        For i = 1 To scenes.count
             Set sc = scenes.Item(i)
             If Not sc Is Nothing Then
                 If StrComp(sc.Name, sceneName, vbTextCompare) = 0 Then
@@ -784,7 +939,7 @@ Function ProductSceneNameExists(scenes As Object, sceneName As String) As Boolea
     On Error Resume Next
     ProductSceneNameExists = False
     Dim i As Integer, sc As Object
-    For i = 1 To scenes.Count
+    For i = 1 To scenes.count
         Set sc = scenes.Item(i)
         If Err.Number = 0 And Not sc Is Nothing Then
             If StrComp(CStr(sc.Name), sceneName, vbTextCompare) = 0 Then
@@ -865,3 +1020,5 @@ Function IsObjectInactive(oObj As Object) As Boolean
     IsObjectInactive = False
     On Error GoTo 0
 End Function
+
+

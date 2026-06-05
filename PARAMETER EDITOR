@@ -106,7 +106,7 @@ Sub EditParameters()
             sViewInputType(0) = "DrawingView"
             
             Dim sVSel As Object
-            Set sVSel = targetDrawing.selection
+            Set sVSel = targetDrawing.Selection
             sVSel.Clear
             
             Dim sVStatus As String
@@ -166,7 +166,7 @@ Sub EditParameters()
             InputType(1) = "Product"
             
             Dim selObj As Object
-            Set selObj = targetDrawing.selection
+            Set selObj = targetDrawing.Selection
             selObj.Clear
             
             Dim selStatus As String
@@ -307,7 +307,7 @@ Sub EditParameters()
                                             ViewInputType(0) = "DrawingView"
                                             
                                             Dim vSel As Object
-                                            Set vSel = targetDrawing.selection
+                                            Set vSel = targetDrawing.Selection
                                             vSel.Clear
                                             
                                             Dim vStatus As String
@@ -908,58 +908,136 @@ Function ProductSceneNameExists(scenes As Object, sceneName As String) As Boolea
     On Error GoTo 0
 End Function
 
+' ---------------------------------------------------------------------------
+' EvaluateMath  - recursive descent parser, no shell / no temp files
+' Supports: + - * /  parentheses  unary minus  decimal numbers
+' ---------------------------------------------------------------------------
 Function EvaluateMath(expr As String, ByRef outVal As Double) As Boolean
     EvaluateMath = False
-    On Error Resume Next
-    
-    Dim cleanExpr As String
-    cleanExpr = ""
-    Dim i As Integer
+    On Error GoTo Failed
+
+    Dim clean As String
+    clean = MathNormalizeExpr(expr)
+    If clean = "" Then Exit Function
+
+    Dim pos As Integer
+    pos = 1
+    outVal = MathParseExpr(clean, pos)
+    EvaluateMath = True
+    Exit Function
+Failed:
+    EvaluateMath = False
+End Function
+
+' Strip spaces; replace commas with dots; keep only math characters
+Private Function MathNormalizeExpr(expr As String) As String
+    Dim i As Integer, C As String, result As String
+    result = ""
     For i = 1 To Len(expr)
-        Dim c As String
-        c = Mid(expr, i, 1)
-        If IsNumeric(c) Or c = "." Or c = "," Or c = "+" Or c = "-" Or c = "*" Or c = "/" Or c = "(" Or c = ")" Then
-            If c = "," Then c = "."
-            cleanExpr = cleanExpr & c
+        C = Mid(expr, i, 1)
+        If C = " " Then
+            ' skip
+        ElseIf C = "," Then
+            result = result & "."
+        ElseIf IsNumeric(C) Or C = "." Or C = "+" Or C = "-" Or _
+               C = "*" Or C = "/" Or C = "(" Or C = ")" Then
+            result = result & C
         End If
     Next i
-    
-    If cleanExpr <> "" Then
-        Dim fso As Object
-        Set fso = CreateObject("Scripting.FileSystemObject")
-        Dim tempVbs As String
-        Dim tempOut As String
-        tempVbs = fso.GetSpecialFolder(2) & "\catia_math_" & Hour(Now) & Minute(Now) & Second(Now) & ".vbs"
-        tempOut = tempVbs & ".out"
-        
-        Dim f As Object
-        Set f = fso.CreateTextFile(tempVbs, True)
-        f.WriteLine "On Error Resume Next"
-        f.WriteLine "WScript.Echo Eval(""" & cleanExpr & """)"
-        f.Close
-        
-        Dim shell As Object
-        Set shell = CreateObject("WScript.Shell")
-        ' Run silently (0) and wait (True)
-        shell.Run "cmd.exe /c cscript //nologo """ & tempVbs & """ > """ & tempOut & """", 0, True
-        
-        If fso.FileExists(tempOut) Then
-            Dim f2 As Object
-            Set f2 = fso.OpenTextFile(tempOut, 1)
-            Dim resultStr As String
-            resultStr = f2.ReadAll()
-            f2.Close
-            fso.DeleteFile tempOut
-            
-            If Trim(resultStr) <> "" And IsNumeric(Trim(resultStr)) Then
-                outVal = CDbl(Trim(resultStr))
-                EvaluateMath = True
+    MathNormalizeExpr = result
+End Function
+
+' Lowest precedence: + and -
+Private Function MathParseExpr(expr As String, ByRef pos As Integer) As Double
+    Dim result As Double
+    result = MathParseTerm(expr, pos)
+
+    Do While pos <= Len(expr)
+        Dim op As String
+        op = Mid(expr, pos, 1)
+        If op = "+" Or op = "-" Then
+            pos = pos + 1
+            Dim rhs As Double
+            rhs = MathParseTerm(expr, pos)
+            If op = "+" Then
+                result = result + rhs
+            Else
+                result = result - rhs
             End If
+        Else
+            Exit Do
         End If
-        
-        If fso.FileExists(tempVbs) Then
-            fso.DeleteFile tempVbs
+    Loop
+
+    MathParseExpr = result
+End Function
+
+' Higher precedence: * and /
+Private Function MathParseTerm(expr As String, ByRef pos As Integer) As Double
+    Dim result As Double
+    result = MathParseFactor(expr, pos)
+
+    Do While pos <= Len(expr)
+        Dim op As String
+        op = Mid(expr, pos, 1)
+        If op = "*" Or op = "/" Then
+            pos = pos + 1
+            Dim rhs As Double
+            rhs = MathParseFactor(expr, pos)
+            If op = "*" Then
+                result = result * rhs
+            Else
+                If rhs = 0 Then Err.Raise vbObjectError, , "Division by zero"
+                result = result / rhs
+            End If
+        Else
+            Exit Do
         End If
+    Loop
+
+    MathParseTerm = result
+End Function
+
+' Highest precedence: numbers, unary minus, parentheses
+Private Function MathParseFactor(expr As String, ByRef pos As Integer) As Double
+    If pos > Len(expr) Then Err.Raise vbObjectError, , "Unexpected end of expression"
+
+    Dim C As String
+    C = Mid(expr, pos, 1)
+
+    ' Unary minus
+    If C = "-" Then
+        pos = pos + 1
+        MathParseFactor = -MathParseFactor(expr, pos)
+        Exit Function
     End If
-    On Error GoTo 0
+
+    ' Parenthesised sub-expression
+    If C = "(" Then
+        pos = pos + 1
+        Dim val As Double
+        val = MathParseExpr(expr, pos)
+        If pos > Len(expr) Or Mid(expr, pos, 1) <> ")" Then
+            Err.Raise vbObjectError, , "Missing closing parenthesis"
+        End If
+        pos = pos + 1
+        MathParseFactor = val
+        Exit Function
+    End If
+
+    ' Number literal
+    Dim numStr As String
+    numStr = ""
+    Do While pos <= Len(expr)
+        C = Mid(expr, pos, 1)
+        If IsNumeric(C) Or C = "." Then
+            numStr = numStr & C
+            pos = pos + 1
+        Else
+            Exit Do
+        End If
+    Loop
+
+    If numStr = "" Then Err.Raise vbObjectError, , "Expected number at position " & pos
+    MathParseFactor = CDbl(numStr)
 End Function

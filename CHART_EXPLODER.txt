@@ -197,6 +197,9 @@ Sub CATMain()
     Dim sceneExistsChoice As VbMsgBoxResult
     If CheckSceneExists(activeDoc, sceneName, finalSceneName, sceneExistsChoice) = False Then Exit Sub
 
+    ' =====================================================
+    ' 1. MEASURE BOUNDING BOXES USING RELATIVE PROJECTION
+    ' =====================================================
     Dim origM() As Variant: ReDim origM(1 To totalParts)
     Dim orient() As Double: ReDim orient(1 To totalParts, 0 To 8)
     
@@ -239,6 +242,7 @@ Sub CATMain()
         Dim forcedM(11) As Variant
         For k = 0 To 11: forcedM(k) = m(k): Next
         
+        ' REMAINING PARTS: X right (Y), Y up (Z), Z pointing me (X)
         forcedM(0) = 0: forcedM(1) = 1: forcedM(2) = 0
         forcedM(3) = 0: forcedM(4) = 0: forcedM(5) = 1
         forcedM(6) = 1: forcedM(7) = 0: forcedM(8) = 0
@@ -275,12 +279,12 @@ Sub CATMain()
         
         If isAnchorPart Then
             If chartMode = 1 Then
-         
+                ' FIRST PART (Mode 1): X down (-Z), Y pointing me (X), Z left (-Y)
                 forcedM(0) = 0: forcedM(1) = 0: forcedM(2) = -1
                 forcedM(3) = 1: forcedM(4) = 0: forcedM(5) = 0
                 forcedM(6) = 0: forcedM(7) = -1: forcedM(8) = 0
             Else
-           
+                ' FIRST PART (Mode 2): Leave exactly as modeled
                 For k = 0 To 11: forcedM(k) = m(k): Next
             End If
         End If
@@ -334,6 +338,9 @@ NextSelectedProduct:
         useRows = False
     End If
 
+    ' =====================================================
+    ' 2. CALCULATE LINEAR OFFSETS
+    ' =====================================================
     Dim rowCount As Integer
     If firstRowCount >= totalParts Then
         rowCount = 1
@@ -424,6 +431,9 @@ NextSelectedProduct:
         rowStartShift(R) = maxWidth - rowWidth(R)
     Next
 
+    ' =====================================================
+    ' 3. CALCULATE ROW OFFSETS
+    ' =====================================================
     If useRows Then
         Dim rowVisualMax As Double
         For R = 0 To rowCount - 1
@@ -452,6 +462,10 @@ NextSelectedProduct:
         Next
     End If
 
+    ' =====================================================
+    ' 4. APPLY POSITIONS & CAPTURE SCENE
+    ' =====================================================
+    ' Temporarily deactivate constraints to allow SetComponents to succeed on sub-assemblies!
     Dim constraints As Object
     On Error Resume Next
     Set constraints = activeDoc.Product.Connections("CATIAConstraints")
@@ -522,13 +536,17 @@ NextSelectedProduct:
         End If
         
         Dim linkResp As Integer
-        linkResp = MsgBox("Do you want to link this newly created Scene to a Drawing View?", vbYesNoCancel + vbQuestion, "Link Scene to View")
+        linkResp = MsgBox("Do you want to create a NEW Drawing View for this Scene?" & vbCrLf & vbCrLf & _
+                          "Yes - Create a NEW View and link the scene" & vbCrLf & _
+                          "No - Link the scene to an EXISTING View" & vbCrLf & _
+                          "Cancel - Skip linking", vbYesNoCancel + vbQuestion, "View Creation")
         
         If linkResp = vbYes Then
-            MsgBox "The macro will now pause." & vbCrLf & vbCrLf & "1. Use the Window menu at the top to switch to your Drawing." & vbCrLf & "2. Click on the View you want to link.", vbInformation, "Switch Window"
+            MsgBox "The macro will now pause." & vbCrLf & vbCrLf & "1. Use the Window menu at the top to switch to your Drawing." & vbCrLf & "2. Click ANYWHERE on the drawing sheet.", vbInformation, "Switch Window"
             
-            Dim ViewInputType(0)
-            ViewInputType(0) = "DrawingView"
+            Dim SheetInputType(1)
+            SheetInputType(0) = "DrawingSheet"
+            SheetInputType(1) = "DrawingView"
             
             Dim vSel As Object
             Set vSel = CATIA.ActiveDocument.Selection
@@ -536,24 +554,77 @@ NextSelectedProduct:
             
             Dim selDoc As Object
             Dim vStatus As String
-            vStatus = vSel.SelectElement4(ViewInputType, "Switch to your Drawing and click on a View", "Select View", False, selDoc)
+            vStatus = vSel.SelectElement4(SheetInputType, "Switch to your Drawing and click anywhere on the sheet", "Select Sheet", False, selDoc)
             
             If vStatus <> "Cancel" And vStatus <> "Undo" And vStatus <> "Redo" Then
+                If TypeName(selDoc) = "DrawingDocument" Then
+                    Dim objSheet As Object
+                    Set objSheet = selDoc.Sheets.ActiveSheet
+                    
+                    Dim objView As Object
+                    Set objView = objSheet.views.Add(newScene.Name)
+                    
+                    Dim objGenBehavior As Object
+                    Set objGenBehavior = objView.GenerativeBehavior
+                    
+                    objGenBehavior.Document = activeDoc.Product
+                    
+                    ' Define the view as a Front View on the ZY Plane
+                    objGenBehavior.DefineFrontView 0, 1, 0, 0, 0, 1
+                    
+                    Dim vLinks As Object
+                    Set vLinks = objView.GenerativeLinks
+                    vLinks.RemoveAllLinks
+                    vLinks.AddLink newScene
+                    
+                    objView.x = 150
+                    objView.y = 150
+                    
+                    selDoc.Activate
+                    objGenBehavior.ForceUpdate
+                    
+                    MsgBox "New View created and Scene linked successfully!", vbInformation
+                Else
+                    MsgBox "You must click inside a Drawing Document.", vbCritical
+                End If
+            Else
+                MsgBox "View creation cancelled.", vbInformation
+            End If
+            
+            vSel.Clear
+            If Not selDoc Is Nothing Then selDoc.Selection.Clear
+            
+        ElseIf linkResp = vbNo Then
+            MsgBox "The macro will now pause." & vbCrLf & vbCrLf & "1. Use the Window menu at the top to switch to your Drawing." & vbCrLf & "2. Click on the View you want to link.", vbInformation, "Switch Window"
+            
+            Dim ViewInputType(0)
+            ViewInputType(0) = "DrawingView"
+            
+            Dim vSel2 As Object
+            Set vSel2 = CATIA.ActiveDocument.Selection
+            vSel2.Clear
+            
+            Dim selDoc2 As Object
+            Dim vStatus2 As String
+            vStatus2 = vSel2.SelectElement4(ViewInputType, "Switch to your Drawing and click on a View", "Select View", False, selDoc2)
+            
+            If vStatus2 <> "Cancel" And vStatus2 <> "Undo" And vStatus2 <> "Redo" Then
                 Dim selView As Object
-                Set selView = selDoc.Selection.Item2(1).Value
+                Set selView = selDoc2.Selection.Item2(1).Value
                 
-                Dim vLinks As Object
-                Set vLinks = selView.GenerativeLinks
-                vLinks.RemoveAllLinks
-                vLinks.AddLink newScene
+                Dim vLinks2 As Object
+                Set vLinks2 = selView.GenerativeLinks
+                vLinks2.RemoveAllLinks
+                vLinks2.AddLink newScene
                                                     
                 selView.GenerativeBehavior.ForceUpdate
                 MsgBox "Scene successfully linked to the selected view!", vbInformation
             Else
                 MsgBox "View linking cancelled.", vbInformation
             End If
-            vSel.Clear
-            If Not selDoc Is Nothing Then selDoc.Selection.Clear
+            
+            vSel2.Clear
+            If Not selDoc2 Is Nothing Then selDoc2.Selection.Clear
         End If
     End If
     Exit Sub
@@ -582,6 +653,9 @@ SafeFail:
     MsgBox "Macro stopped safely." & vbCrLf & "Error Number : " & errNum & vbCrLf & "Description : " & errDesc, vbExclamation, "Safe Stop"
 End Sub
 
+' =====================================================
+' MEASURES RELATIVE BOUNDING BOXES FOR SUB-ASSEMBLIES
+' =====================================================
 Sub GetRelativeProjectedExtents(oProd As Object, ByRef baseM() As Variant, axisDir As String, ByRef outMin As Double, ByRef outMax As Double)
     outMin = 99999999#
     outMax = -99999999#
@@ -667,6 +741,9 @@ Sub RecursiveGetRelative(oItem As Object, ByRef parentM() As Variant, axisDir As
     End If
 End Sub
 
+' =====================================================
+' ROTATE TRANSFORMATION MATRIX (GLOBAL AXES)
+' =====================================================
 Sub RotateMatrixGlobal(ByRef matrix() As Variant, ByVal axis As String, ByVal angleDeg As Double)
     Dim rad As Double, pi As Double
     pi = 4 * Atn(1)
@@ -848,6 +925,9 @@ Failed:
     TryMeasureBody = False
 End Function
 
+' =====================================================
+' SCENE & HELPER FUNCTIONS
+' =====================================================
 Sub GetCrossAxes(ByVal mainDir As String, ByRef c1 As String, ByRef c2 As String)
     Dim m As String: m = UCase(Right(mainDir, 1))
     If m = "X" Then
